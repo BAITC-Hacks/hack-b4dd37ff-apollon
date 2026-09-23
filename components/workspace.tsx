@@ -4,6 +4,7 @@ import { createContext, useCallback, useContext, useEffect, useRef, useState, ty
 import { ArrowUpRight, Sparkles, X } from "lucide-react";
 import type { DatasetSummary } from "@/lib/contracts/api";
 import type { ImportIssue, Recommendation, SourceFile, SourceRef } from "@/lib/contracts/engine";
+import { suggestedQuestions } from "@/lib/assistant-suggestions";
 
 export interface DatasetDetails {
   name: string; synthetic: boolean; cutoffDate: string; files: SourceFile[];
@@ -88,24 +89,6 @@ function chatContent(message: string): ReactNode[] {
   }
   if (end < message.length) content.push(message.slice(end));
   return content;
-}
-
-function suggestedQuestions(recommendations: Recommendation[]): string[] {
-  const firstTen = recommendations.slice(0, 10);
-  const first = firstTen.find(row => row.quantity > 0) ?? firstTen[0];
-  if (!first) return [];
-  const review = firstTen.find(row => row.needsReview || row.warnings.length > 0 || row.confidence === "low")
-    ?? firstTen.find(row => row.key !== first.key) ?? first;
-  const anomaly = firstTen.find(row => row.anomalies.length > 0);
-  const third = anomaly ?? firstTen.find(row => row.key !== first.key && row.key !== review.key)
-    ?? firstTen.find(row => row.key !== review.key) ?? first;
-  const sku = (row: Recommendation) => `${row.supplier} ${row.code}`;
-  return [
-    first.quantity > 0 ? `Почему рекомендуется заказать ${sku(first)}?` : `Как рассчитана рекомендация для ${sku(first)}?`,
-    review.needsReview || review.warnings.length > 0 || review.confidence === "low"
-      ? `Что проверить перед заказом ${sku(review)}?` : `Насколько надёжен расчёт по ${sku(review)}?`,
-    anomaly ? `Какие аномалии обнаружены у ${sku(third)}?` : `Как учтены остаток и поставки по ${sku(third)}?`,
-  ];
 }
 
 export function Copilot({ runId, recommendations = [] }: { runId?: string; recommendations?: Recommendation[] }) {
