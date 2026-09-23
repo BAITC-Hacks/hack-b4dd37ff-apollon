@@ -55,7 +55,7 @@ export interface Recommendation {
 export function recommendationNeedsReview(row: Pick<Recommendation, "confidence" | "warnings" | "anomalies">): boolean {
   return row.confidence === "low" && (row.warnings.length > 0 || row.anomalies.some(anomaly => anomaly.excluded));
 }
-export interface PlanFilter { supplier?: Supplier; category?: string }
+export interface PlanFilter { supplier?: Supplier; category?: string; suppliers?: Supplier[] }
 export interface PlanResult { recommendations: Recommendation[]; policy: Policy; cutoffDate: string; warnings: string[] }
 export interface CaseCheck { id: string; name: string; passed: boolean; details: string; values: Record<string, number | string | boolean> }
 export interface BacktestRow {

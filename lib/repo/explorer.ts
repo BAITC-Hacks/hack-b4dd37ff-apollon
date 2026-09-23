@@ -74,7 +74,7 @@ export async function listTransactions(filter: ExplorerFilter, page?: number, pa
 }
 
 export interface RunHistoryOrder { supplier: string; status: string; revision: number; approver: string | null; approvedAt: string | null }
-export interface RunHistoryEntry { id: string; datasetId: string; datasetName: string; synthetic: boolean; createdAt: string; baseRunId: string | null; scope: { supplier?: string; category?: string } | null; orders: RunHistoryOrder[] }
+export interface RunHistoryEntry { id: string; datasetId: string; datasetName: string; synthetic: boolean; createdAt: string; baseRunId: string | null; scope: { supplier?: string; category?: string; suppliers?: string[] } | null; orders: RunHistoryOrder[] }
 
 /** Read-only history listing for the "История расчётов" panel: adds dataset name/type and per-supplier order status on top of what /api/runs exposes, without recalculating anything. */
 export async function listRunHistory(datasetId?: string): Promise<RunHistoryEntry[]> {
@@ -92,7 +92,7 @@ export async function listRunHistory(datasetId?: string): Promise<RunHistoryEntr
   return runs.map(r => ({
     id: r.id, datasetId: r.datasetId, datasetName: r.dataset.name, synthetic: r.dataset.synthetic,
     createdAt: r.createdAt.toISOString(), baseRunId: r.baseRunId,
-    scope: (r.filter as { supplier?: string; category?: string } | null) ?? null,
+    scope: (r.filter as { supplier?: string; category?: string; suppliers?: string[] } | null) ?? null,
     orders: r.orders.map(o => ({ supplier: o.supplier, status: o.status, revision: o.revision, approver: o.approver, approvedAt: o.approvedAt?.toISOString() ?? null })),
   }));
 }

@@ -81,6 +81,13 @@ describe("active dataset evidence", () => {
     expect(dataset.suppliers[0].issues).toHaveLength(1);
     expect(calculatePlan(dataset, {}, { category: "absent" }).warnings).toEqual([]);
   });
+  it("limits a plan to the selected suppliers", () => {
+    const dataset = makeEngineFixture();
+    const supplier = calculatePlan(dataset).recommendations[0].supplier;
+    const scoped = calculatePlan(dataset, {}, { suppliers: [supplier] }).recommendations;
+    expect(scoped.length).toBeGreaterThan(0);
+    expect(scoped.every(r => r.supplier === supplier)).toBe(true);
+  });
   it("marks only low-confidence SKUs with a concrete warning or excluded sale for review", () => {
     expect(recommendationNeedsReview({ confidence: "high", warnings: ["MOQ неизвестен"], anomalies: [] })).toBe(false);
     expect(recommendationNeedsReview({ confidence: "medium", warnings: ["MOQ неизвестен"], anomalies: [] })).toBe(false);

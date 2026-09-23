@@ -13,7 +13,7 @@ export const policySchema = z.object({
   availabilityOverrides: z.record(z.string(), z.number().min(0).max(1)),
   currentStockOverrides: z.record(z.string(), quantity),
 }).partial();
-export const runRequestSchema = z.object({ datasetId: z.string().min(1), policy: policySchema.default({}), supplier: z.enum(["IEK", "SE"]).optional(), category: z.string().optional(), baseRunId: z.string().optional() });
+export const runRequestSchema = z.object({ datasetId: z.string().min(1), policy: policySchema.default({}), supplier: z.enum(["IEK", "SE"]).optional(), category: z.string().optional(), suppliers: z.array(z.enum(["IEK", "SE"])).max(2).optional(), baseRunId: z.string().optional() });
 export const editOrderSchema = z.object({ expectedRevision: z.number().int().nonnegative(), edits: z.array(z.object({ key: z.string(), quantity })).min(1).max(10000) });
 export const approveOrderSchema = z.object({ expectedRevision: z.number().int().nonnegative(), approver: z.string().trim().min(2).max(100), acknowledgedEstimates: z.boolean(), keys: z.array(z.string()).optional() });
 export const checksRequestSchema = z.object({ datasetId: z.string().min(1).max(200) });

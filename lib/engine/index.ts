@@ -206,6 +206,7 @@ export function calculatePlan(dataset: DatasetInput, overrides: Partial<Policy> 
   const recommendations: Recommendation[] = [];
   for (const input of dataset.suppliers) {
     if (filter.supplier && input.supplier !== filter.supplier) continue;
+    if (filter.suppliers?.length && !filter.suppliers.includes(input.supplier)) continue;
     const sales = grouped(input.sales), stocks = grouped(input.stocks), snapshots = grouped(input.currentStock), transactions = grouped(input.transactions), deliveries = grouped(input.deliveries);
     const complete = new Map(input.products.map(p => [p.code, seriesFrom(sales.get(p.code) ?? [], cutoff)]));
     const pool = new Map<string, number[][]>();

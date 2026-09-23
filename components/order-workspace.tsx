@@ -1,7 +1,8 @@
 "use client";
 
 import Image from "next/image";
-import { useEffect, useMemo, useRef, useState } from "react";
+import Link from "next/link";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowDownToLine, ArrowRight, ArrowUpDown, Check, CheckCheck, ChevronDown, ChevronLeft, ChevronRight,
   Database, FileClock, FileSpreadsheet, FolderUp, History, Play, Save, Search,
@@ -10,6 +11,7 @@ import {
 import type { DatasetSummary, OrderView, RunView } from "@/lib/contracts/api";
 import { DEFAULT_POLICY, type Policy, type Recommendation } from "@/lib/contracts/engine";
 import type { RunHistoryEntry } from "@/lib/repo/explorer";
+import { routePath, type Route } from "@/lib/route";
 import { SkuDetailBody } from "./sku-detail";
 import { DataExplorer } from "./data-explorer";
 import { ChecksDashboard } from "./checks-dashboard";
@@ -22,41 +24,64 @@ type AuditEvent = { id: string; createdAt: string; action?: string; type?: strin
 const urgencyLabels = { CRITICAL: "Критично", HIGH: "Высокий", NORMAL: "Планово" };
 const confidenceLabels = { high: "Высокая", medium: "Средняя", low: "Низкая" };
 
-const REQUIRED_REPORTS = [
-  "Товары и MOQ (минимальная партия, кратность заказа)",
-  "Ежемесячные продажи в количественном выражении (2+ года истории)",
-  "Ежемесячные остатки на складе",
-  "Динамика продаж / сезонность",
-  "Товар в пути (ожидаемые поставки с датой ETA)",
-];
+/** The six partner reports per supplier. `match` assigns dropped files to a slot by their file name. */
+const UPLOAD_SLOTS = [
+  { id: "sales", title: "Продажи по месяцам", hint: "Количество продаж за 2+ года", match: (n: string) => /продаж/i.test(n) && !/динамик/i.test(n) },
+  { id: "stock", title: "Остатки по месяцам", hint: "Остаток на складе на конец месяца", match: (n: string) => /остат/i.test(n) },
+  { id: "transit", title: "Товар в пути", hint: "Ожидаемые поставки и даты прихода", match: (n: string) => /пут[иь]|transit/i.test(n) },
+  { id: "moq", title: "MOQ и кратность", hint: "Минимальная партия и кратность заказа", match: (n: string) => /moq|кратн/i.test(n) },
+  { id: "dynamics", title: "Динамика продаж", hint: "Документы продаж: даты, количества", match: (n: string) => /динамик/i.test(n) },
+  { id: "season", title: "Сезонность", hint: "Сезонные коэффициенты по месяцам", match: (n: string) => /сезон/i.test(n) },
+] as const;
+type SlotId = typeof UPLOAD_SLOTS[number]["id"];
+const MAX_FILE_BYTES = 20 * 1024 * 1024;
+const PAGE_SIZE = 100;
+const unitLabel = (unit: string) => unit === "unknown" ? "ед. не указана" : unit;
 
 /**
  * Single-page procurement workspace: choose data -> validate -> calculate -> review -> adjust -> approve -> export.
  * Replaces the former sidebar-driven multi-page app (see UI_UX_REDESIGN_PROMPT.md).
  */
-export function OrderWorkspace() {
+export function OrderWorkspace({ initialRoute, initialSku }: { initialRoute: Route; initialSku?: string }) {
   const { datasetId, dataset, datasets, details, loading: datasetsLoading, error: datasetError, selectDataset, refresh } = useWorkspace();
 
+  // ---- URL: every workspace state has an address (/, /datasets/<id>, /runs/<id>, ?sku=<key>) ----
+  const [route, setRoute] = useState<Route>(initialRoute);
+  const navigate = useCallback((next: Route) => { window.history.pushState(null, "", routePath(next)); setRoute(next); setDrawerKeyState(undefined); }, []);
+  useEffect(() => {
+    const onPop = () => {
+      const parts = window.location.pathname.split("/").filter(Boolean);
+      setRoute(parts.length === 2 && (parts[0] === "datasets" || parts[0] === "runs") ? { kind: parts[0] === "datasets" ? "dataset" : "run", id: decodeURIComponent(parts[1]) } : { kind: "start" });
+      setDrawerKeyState(new URLSearchParams(window.location.search).get("sku") || undefined);
+    };
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, []);
+
   // ---- Data source (upload / case data) ----
-  const [sourceOpen, setSourceOpen] = useState(false);
-  const [files, setFiles] = useState<File[]>([]);
+  const [slots, setSlots] = useState<Partial<Record<SlotId, File>>>({});
   const [uploadName, setUploadName] = useState("");
   const [uploadSupplier, setUploadSupplier] = useState("");
   const [sourceBusy, setSourceBusy] = useState<"" | "upload" | "refresh">("");
+  const [dragSlot, setDragSlot] = useState<SlotId | "all" | "">("");
   const [sourceError, setSourceError] = useState("");
 
   // ---- Calculation scope / policy ----
   const [policy, setPolicy] = useState<Policy>(DEFAULT_POLICY);
   const [committedPolicy, setCommittedPolicy] = useState<Policy>(DEFAULT_POLICY);
-  const [supplier, setSupplier] = useState("");
-  const [category, setCategory] = useState("");
-  const [committedScope, setCommittedScope] = useState({ supplier: "", category: "" });
+  // Empty selection means "all suppliers".
+  const [supplierScope, setSupplierScope] = useState<string[]>([]);
+  const [committedSuppliers, setCommittedSuppliers] = useState<string[]>([]);
 
   // ---- Runs ----
-  const [runs, setRuns] = useState<RunSummary[]>([]);
-  const [run, setRun] = useState<RunView>();
-  const pendingRunId = useRef<string | null>(null);
-  const [runLoading, setRunLoading] = useState(false);
+  const [runsState, setRunsState] = useState<{ datasetId: string; runs: RunSummary[] }>({ datasetId: "", runs: [] });
+  const runs = runsState.datasetId === datasetId ? runsState.runs : [];
+  const [loadedRun, setRun] = useState<RunView>();
+  // Only the run named by the URL is shown; a stale one stays hidden while the next one loads.
+  const run = route.kind === "run" && loadedRun?.id === route.id ? loadedRun : undefined;
+  const [failedRunId, setFailedRunId] = useState("");
+  const runRef = useRef<{ id: string; datasetId: string } | undefined>(undefined);
+  const runLoading = route.kind === "run" && loadedRun?.id !== route.id && failedRunId !== route.id;
   const [calcBusy, setCalcBusy] = useState(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
@@ -68,7 +93,13 @@ export function OrderWorkspace() {
   const [edits, setEdits] = useState<Record<string, string>>({});
   const [selected, setSelected] = useState<string[]>([]);
   const [rowBusy, setRowBusy] = useState("");
-  const [drawerKey, setDrawerKey] = useState<string>();
+  const [drawerKey, setDrawerKeyState] = useState<string | undefined>(initialSku);
+  function setDrawerKey(key?: string) {
+    const url = new URL(window.location.href);
+    if (key) url.searchParams.set("sku", key); else url.searchParams.delete("sku");
+    window.history.replaceState(null, "", url.pathname + url.search);
+    setDrawerKeyState(key);
+  }
   const [audit, setAudit] = useState<{ supplier: string; events: AuditEvent[] }>();
   const [approval, setApproval] = useState<{ order: OrderView; keys?: string[] }>();
   const [approver, setApprover] = useState(""); const [acknowledged, setAcknowledged] = useState(false);
@@ -81,40 +112,39 @@ export function OrderWorkspace() {
   const [historyError, setHistoryError] = useState("");
   const [confirmNewCalc, setConfirmNewCalc] = useState(false);
 
-  const categories = useMemo(() => [...new Set((details?.suppliers || []).filter(s => !supplier || s.supplier === supplier).flatMap(s => s.categories))].sort(), [details, supplier]);
   const issues = useMemo(() => (details?.suppliers || []).flatMap(s => s.issues.map(i => ({ ...i, supplier: i.supplier || s.supplier }))), [details]);
   const blocking = issues.filter(i => i.severity === "error");
-  const hasEdits = Object.keys(edits).length > 0;
-  const needsRecalc = !!run && (JSON.stringify(policy) !== JSON.stringify(committedPolicy) || supplier !== committedScope.supplier || category !== committedScope.category);
+  const hasEdits = !!run && Object.keys(edits).length > 0;
+  const needsRecalc = !!run && (JSON.stringify(policy) !== JSON.stringify(committedPolicy) || supplierScope.join() !== committedSuppliers.join());
 
-  // Collapse the source step once a dataset becomes active (render-time state adjustment, not an effect: https://react.dev/learn/you-might-not-need-an-effect).
-  const [lastDatasetId, setLastDatasetId] = useState(datasetId);
-  if (datasetId !== lastDatasetId) { setLastDatasetId(datasetId); if (datasetId) setSourceOpen(false); }
+  function addRun(forDataset: string, entry: RunSummary) {
+    setRunsState(current => ({ datasetId: forDataset, runs: [entry, ...(current.datasetId === forDataset ? current.runs.filter(r => r.id !== entry.id) : [])] }));
+  }
+  function applyRun(loaded: RunView) {
+    runRef.current = { id: loaded.id, datasetId: loaded.datasetId };
+    setRun(loaded); setPolicy(loaded.result.policy); setCommittedPolicy(loaded.result.policy);
+    setEdits({}); setSelected([]); setPage(0);
+  }
 
-  // Load runs for the active dataset; reopening a history entry loads that specific run instead of the latest one.
+  // Route → state. A run URL loads that saved result (never recalculates); a dataset URL opens its calculation step.
+  useEffect(() => {
+    if (route.kind !== "run") { selectDataset(route.kind === "dataset" ? route.id : ""); return; }
+    if (runRef.current?.id === route.id) { selectDataset(runRef.current.datasetId); return; }
+    let active = true;
+    const id = route.id;
+    api<{ run: RunView }>(`/api/runs/${encodeURIComponent(id)}`)
+      .then(loaded => { if (active) { applyRun(loaded.run); selectDataset(loaded.run.datasetId); } })
+      .catch(e => { if (active) { setFailedRunId(id); setError(e instanceof Error ? e.message : "Не удалось открыть расчёт"); } });
+    return () => { active = false; };
+  }, [route, selectDataset]);
+
+  // Saved runs of the active dataset (for the run switcher and "open last calculation").
   useEffect(() => {
     if (!datasetId) return;
     let active = true;
-    async function load() {
-      setRunLoading(true); setError(""); setEdits({}); setSelected([]); setPage(0);
-      try {
-        const result = await api<{ runs: RunSummary[] }>(`/api/runs?datasetId=${encodeURIComponent(datasetId)}`);
-        if (!active) return;
-        setRuns(result.runs);
-        const requested = pendingRunId.current; pendingRunId.current = null;
-        const saved = requested || localStorage.getItem(`apollon.run.${datasetId}`);
-        const id = result.runs.find(r => r.id === saved)?.id || (requested ? undefined : result.runs[0]?.id);
-        if (id) {
-          const loaded = await api<{ run: RunView }>(`/api/runs/${encodeURIComponent(id)}`);
-          if (active) { setRun(loaded.run); setPolicy(loaded.run.result.policy); setCommittedPolicy(loaded.run.result.policy); }
-        } else if (requested) {
-          const loaded = await api<{ run: RunView }>(`/api/runs/${encodeURIComponent(requested)}`);
-          if (active) { setRun(loaded.run); setPolicy(loaded.run.result.policy); setCommittedPolicy(loaded.run.result.policy); }
-        } else if (active) setRun(undefined);
-      } catch (e) { if (active) setError(e instanceof Error ? e.message : "Не удалось открыть расчёты"); }
-      finally { if (active) setRunLoading(false); }
-    }
-    void load();
+    api<{ runs: RunSummary[] }>(`/api/runs?datasetId=${encodeURIComponent(datasetId)}`)
+      .then(result => { if (active) setRunsState({ datasetId, runs: result.runs }); })
+      .catch(() => { if (active) setRunsState({ datasetId, runs: [] }); });
     return () => { active = false; };
   }, [datasetId]);
 
@@ -130,40 +160,33 @@ export function OrderWorkspace() {
   async function importData() {
     setSourceBusy("upload"); setSourceError(""); setSuccess("");
     try {
-      const body = new FormData(); files.forEach(file => body.append("files", file));
+      const body = new FormData(); Object.values(slots).forEach(file => file && body.append("files", file));
       if (uploadName.trim()) body.append("name", uploadName.trim());
       if (uploadSupplier) body.append("supplier", uploadSupplier);
       const result = await api<{ dataset: DatasetSummary }>("/api/import", { method: "POST", body });
-      await refresh(result.dataset.id);
-      setFiles([]); setUploadName(""); setUploadSupplier("");
+      await refresh();
+      setSlots({}); setUploadName(""); setUploadSupplier("");
+      navigate({ kind: "dataset", id: result.dataset.id });
       setSuccess(`«${result.dataset.name}» загружен. Проверьте сводку данных ниже и запустите расчёт.`);
     } catch (e) { setSourceError(e instanceof Error ? e.message : "Не удалось загрузить данные"); }
     finally { setSourceBusy(""); }
   }
 
-  // Opens a saved run without recalculating; resets per-run UI state so edits never leak across runs.
-  async function openRun(id: string, notice?: string) {
-    pendingRunId.current = id; setRun(undefined); setError(""); setSuccess("");
-    try {
-      const r = await api<{ run: RunView }>(`/api/runs/${encodeURIComponent(id)}`);
-      setRun(r.run); setPolicy(r.run.result.policy); setCommittedPolicy(r.run.result.policy);
-      setEdits({}); setSelected([]); setPage(0);
-      localStorage.setItem(`apollon.run.${r.run.datasetId}`, r.run.id);
-      if (notice) setSuccess(notice);
-    } catch (err) { setError(err instanceof Error ? err.message : "Не удалось открыть расчёт"); }
-    finally { pendingRunId.current = null; }
+  // Opens a saved run without recalculating: the URL change loads it.
+  function openRun(id: string, notice?: string) {
+    setError(""); setSuccess(notice || "");
+    navigate({ kind: "run", id });
   }
 
   async function calculate() {
     if (!datasetId || calcBusy) return;
     setCalcBusy(true); setError(""); setSuccess("");
     try {
-      const result = await api<{ run: RunView }>("/api/runs", { method: "POST", body: JSON.stringify({ datasetId, policy, ...(supplier ? { supplier } : {}), ...(category ? { category } : {}) }) });
-      setRun(result.run);
-      setRuns(r => [{ id: result.run.id, createdAt: result.run.createdAt, baseRunId: null }, ...r]);
-      setEdits({}); setSelected([]); setPage(0);
-      setCommittedPolicy(policy); setCommittedScope({ supplier, category });
-      localStorage.setItem(`apollon.run.${datasetId}`, result.run.id);
+      const result = await api<{ run: RunView }>("/api/runs", { method: "POST", body: JSON.stringify({ datasetId, policy, ...(supplierScope.length ? { suppliers: supplierScope } : {}) }) });
+      applyRun(result.run);
+      setCommittedPolicy(policy); setCommittedSuppliers(supplierScope);
+      addRun(result.run.datasetId, { id: result.run.id, createdAt: result.run.createdAt, baseRunId: null });
+      navigate({ kind: "run", id: result.run.id });
       setSuccess("Расчёт готов. Проверьте рекомендации перед утверждением.");
     } catch (e) { setError(e instanceof Error ? e.message : "Ошибка расчёта"); }
     finally { setCalcBusy(false); }
@@ -174,12 +197,15 @@ export function OrderWorkspace() {
   const filtered = useMemo(() => {
     const ranks = { CRITICAL: 0, HIGH: 1, NORMAL: 2 };
     return recommendations.filter(r => (!urgency || r.urgency === urgency) && (!reviewOnly || r.needsReview) && (!query || `${r.name} ${r.code} ${r.supplierArticle}`.toLocaleLowerCase().includes(query.toLocaleLowerCase()))).sort((a, b) => {
+      // Rows that need manual review always go after the confident ones, whatever the chosen sort.
+      if (a.needsReview !== b.needsReview) return a.needsReview ? 1 : -1;
       if (sort.key === "name") return a.name.localeCompare(b.name, "ru") * sort.direction;
       if (sort.key === "urgency") return (ranks[a.urgency] - ranks[b.urgency]) * sort.direction;
       return ((a[sort.key] ?? Infinity) - (b[sort.key] ?? Infinity)) * sort.direction;
     });
   }, [recommendations, urgency, reviewOnly, query, sort]);
-  const pageSize = 20; const pageCount = Math.max(1, Math.ceil(filtered.length / pageSize)); const activePage = Math.min(page, pageCount - 1); const visible = filtered.slice(activePage * pageSize, (activePage + 1) * pageSize);
+  const reviewCount = useMemo(() => recommendations.filter(r => r.needsReview).length, [recommendations]);
+  const pageSize = PAGE_SIZE; const pageCount = Math.max(1, Math.ceil(filtered.length / pageSize)); const activePage = Math.min(page, pageCount - 1); const visible = filtered.slice(activePage * pageSize, (activePage + 1) * pageSize);
   function toggleSort(key: typeof sort.key) { setSort(s => ({ key, direction: s.key === key ? -s.direction : 1 })); }
   function toggleKey(key: string) { setSelected(s => s.includes(key) ? s.filter(k => k !== key) : [...s, key]); }
   function updateOrder(order: OrderView) { setRun(r => r ? { ...r, orders: r.orders.map(o => o.id === order.id ? order : o) } : r); }
@@ -227,12 +253,8 @@ export function OrderWorkspace() {
     api<{ history: RunHistoryEntry[] }>("/api/history").then(r => setHistory(r.history)).catch(e => setHistoryError(e instanceof Error ? e.message : "Не удалось загрузить историю"));
   }
   function openHistoryEntry(entry: RunHistoryEntry) {
-    pendingRunId.current = entry.id;
-    setHistoryOpen(false); setSourceOpen(false); setSuccess(""); setError("");
-    if (entry.datasetId !== datasetId) selectDataset(entry.datasetId);
-    else { // same dataset: trigger the load effect manually since datasetId won't change
-      void openRun(entry.id);
-    }
+    setHistoryOpen(false);
+    openRun(entry.id);
   }
 
   function startNewCalculation() {
@@ -240,73 +262,122 @@ export function OrderWorkspace() {
     resetToSource();
   }
   function resetToSource() {
-    setRun(undefined); setRuns([]); setEdits({}); setSelected([]);
-    setPolicy(DEFAULT_POLICY); setCommittedPolicy(DEFAULT_POLICY); setSupplier(""); setCategory(""); setCommittedScope({ supplier: "", category: "" });
-    setSourceOpen(!datasetId); setError(""); setSuccess(""); setConfirmNewCalc(false);
+    setPolicy(DEFAULT_POLICY); setCommittedPolicy(DEFAULT_POLICY); setSupplierScope([]); setCommittedSuppliers([]);
+    setError(""); setSuccess(""); setConfirmNewCalc(false);
+    navigate({ kind: "start" });
+  }
+
+  // ---- Upload slots ----
+  function acceptFile(file: File): string {
+    if (!/\.xlsx$/i.test(file.name) || file.name.startsWith("~$")) return `${file.name}: нужен файл Excel .xlsx`;
+    if (file.size > MAX_FILE_BYTES) return `${file.name}: файл больше 20 МБ`;
+    return "";
+  }
+  function putFile(slot: SlotId, file: File) {
+    const problem = acceptFile(file);
+    if (problem) { setSourceError(problem); return; }
+    setSourceError(""); setSlots(current => ({ ...current, [slot]: file }));
+  }
+  /** Several files at once: each goes to the slot its name matches; unknown names are reported, never guessed. */
+  function distributeFiles(list: File[]) {
+    const next = { ...slots }; const problems: string[] = [];
+    for (const file of list) {
+      const problem = acceptFile(file);
+      if (problem) { problems.push(problem); continue; }
+      const slot = UPLOAD_SLOTS.find(s => s.match(file.name));
+      if (slot) next[slot.id] = file; else problems.push(`${file.name}: не удалось определить тип отчёта — перетащите его в нужную ячейку`);
+    }
+    setSlots(next); setSourceError(problems.join("\n"));
   }
 
 
+  const filledCount = UPLOAD_SLOTS.filter(slot => slots[slot.id]).length;
+  const caseDatasets = datasets.filter(d => !d.synthetic);
+  const onStart = route.kind === "start";
+
   return <div className="app-shell">
     <header className="app-header">
-      <div className="app-brand">
-        <Image src="/brand/ekt-logo-256.png" alt="Электрокомплект" width={38} height={38} className="app-brand-logo"/>
+      <Link className="app-brand" href="/" onClick={e => { if (e.metaKey || e.ctrlKey || e.shiftKey) return; e.preventDefault(); startNewCalculation(); }}>
+        <Image src="/brand/ekt-logo-256.png" alt="" width={38} height={38} className="app-brand-logo"/>
         <div className="app-brand-text"><span>Apollon</span><small>закуп для ТОО «Электрокомплект»</small></div>
-      </div>
+      </Link>
       <div className="app-header-actions">
-        <button className="button" onClick={startNewCalculation}><Sparkles size={14}/> Новый расчёт</button>
-        <button className="button" onClick={openHistory}><History size={14}/> История расчётов</button>
+        {!onStart && <button className="button" onClick={startNewCalculation}><Sparkles size={14} aria-hidden="true"/> Новый расчёт</button>}
+        <button className="button" onClick={openHistory}><History size={14} aria-hidden="true"/> История расчётов</button>
       </div>
     </header>
 
     <ErrorNotice error={datasetError || error}/>
-    {success && <div className="notice" role="status"><Check size={14} style={{ display: "inline", verticalAlign: "-3px", marginRight: 7 }}/>{success}</div>}
+    {success && <div className="notice" role="status"><Check size={14} aria-hidden="true" style={{ display: "inline", verticalAlign: "-3px", marginRight: 7 }}/>{success}</div>}
 
-    {datasetsLoading && !datasetId ? <LoadingState text="Загружаем данные…"/> : (sourceOpen || !datasetId) ? <>
-      <div className="page-heading no-margin"><div><h1>Данные для расчёта</h1><p>Выберите сохранённые отчёты или загрузите новые.</p></div>{datasetId && <button className="button" onClick={() => setSourceOpen(false)}>Вернуться к расчёту</button>}</div>
+    {onStart && <>
+      <div className="page-heading no-margin"><div><h1>Рассчитайте заказ поставщику</h1><p>Загрузите свои отчёты или используйте подготовленные данные кейса.</p></div></div>
       <div className="source-cards">
-        <section className="card"><header className="card-header"><div><h2>Загрузить свои отчёты</h2><p>Каждая загрузка создаёт отдельный набор данных.</p></div><span className="badge">XLSX</span></header><div className="card-body">
-          <div className="upload-drop" onDragOver={e => e.preventDefault()} onDrop={e => { e.preventDefault(); setFiles(Array.from(e.dataTransfer.files)); }}>
-            <UploadCloud size={30}/><h3>Перенесите файлы Excel сюда</h3><p>Продажи, остатки, сезонность, MOQ/кратность и товары в пути</p>
-            <label className="sr-only" htmlFor="workbook-files">Выберите рабочие книги</label>
-            <input id="workbook-files" type="file" accept=".xlsx" multiple onChange={e => setFiles(Array.from(e.target.files || []))}/>
+        <section className="card upload-card" aria-labelledby="upload-title"
+          onDragOver={e => { e.preventDefault(); if (!dragSlot) setDragSlot("all"); }}
+          onDragLeave={e => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setDragSlot(""); }}
+          onDrop={e => { e.preventDefault(); setDragSlot(""); distributeFiles(Array.from(e.dataTransfer.files)); }}>
+          <header className="card-header"><div><h2 id="upload-title">Загрузить свои отчёты</h2><p>Шесть отчётов одного поставщика в формате .xlsx. Перетащите все файлы сразу — они распределятся по названию.</p></div><span className="badge">{filledCount} из 6</span></header>
+          <div className="card-body">
+            <div className={`upload-slots ${dragSlot === "all" ? "dragging" : ""}`}>
+              {UPLOAD_SLOTS.map((slot, index) => { const file = slots[slot.id]; return <div key={slot.id}
+                className={`upload-slot ${file ? "filled" : ""} ${dragSlot === slot.id ? "dragging" : ""}`}
+                onDragOver={e => { e.preventDefault(); e.stopPropagation(); setDragSlot(slot.id); }}
+                onDrop={e => { e.preventDefault(); e.stopPropagation(); setDragSlot(""); const [first] = Array.from(e.dataTransfer.files); if (first) putFile(slot.id, first); }}>
+                <span className="upload-slot-index" aria-hidden="true">{file ? <Check size={14}/> : index + 1}</span>
+                <div className="upload-slot-text">
+                  <strong>{slot.title}</strong>
+                  {file ? <span className="upload-slot-file" title={file.name}><FileSpreadsheet size={13} aria-hidden="true"/>{file.name} · {num(file.size / 1024)} КБ</span> : <span>{slot.hint}</span>}
+                </div>
+                {file
+                  ? <button type="button" className="icon-button" aria-label={`Убрать файл «${slot.title}»`} onClick={() => setSlots(current => { const next = { ...current }; delete next[slot.id]; return next; })}><X size={15}/></button>
+                  : <label className="button small upload-slot-pick">Выбрать<input type="file" accept=".xlsx" className="sr-only" aria-label={`Файл: ${slot.title}`} onChange={e => { const f = e.target.files?.[0]; if (f) putFile(slot.id, f); e.target.value = ""; }}/></label>}
+              </div>; })}
+            </div>
+            <div className="upload-bulk">
+              <UploadCloud size={16} aria-hidden="true"/>
+              <span>Перетащите файлы сюда или</span>
+              <label className="upload-bulk-pick">выберите несколько<input type="file" accept=".xlsx" multiple className="sr-only" aria-label="Выбрать несколько отчётов" onChange={e => { distributeFiles(Array.from(e.target.files || [])); e.target.value = ""; }}/></label>
+            </div>
+            <div className="upload-fields">
+              <label className="field"><span>Поставщик</span><select value={uploadSupplier} onChange={e => setUploadSupplier(e.target.value)}><option value="">Определить по названию файлов</option><option value="IEK">IEK</option><option value="SE">Systeme Electric</option></select></label>
+              <label className="field"><span>Название набора</span><input value={uploadName} maxLength={120} onChange={e => setUploadName(e.target.value)} placeholder="Например, IEK сентябрь…" autoComplete="off"/></label>
+            </div>
+            {sourceError && <div className="notice danger" role="alert" style={{ whiteSpace: "pre-line" }}>{sourceError}</div>}
+            <div className="upload-submit">
+              <button className="button primary" disabled={!filledCount || !!sourceBusy} onClick={() => void importData()}>{sourceBusy === "upload" ? <span className="spinner"/> : <FolderUp size={15} aria-hidden="true"/>} {sourceBusy === "upload" ? "Импортируем и проверяем…" : "Загрузить и проверить"}</button>
+              <span className="chart-caption">{filledCount === 0 ? "Добавьте хотя бы один отчёт." : filledCount < 6 ? `Не хватает ${6 - filledCount} из 6 — отсутствующие данные будут отмечены в проверке.` : "Все шесть отчётов на месте."}</span>
+            </div>
           </div>
-          {files.length > 0 && <div className="file-list">{files.map((file, i) => <div className="file-row" key={`${file.name}-${i}`}><FileSpreadsheet size={15}/><span>{file.name}</span><small>{num(file.size / 1024)} КБ</small></div>)}</div>}
-          <div className="upload-fields">
-            <label className="field"><span>Название набора</span><input value={uploadName} onChange={e => setUploadName(e.target.value)} placeholder="Например, отчёты за сентябрь"/></label>
-            <label className="field"><span>Поставщик</span><select value={uploadSupplier} onChange={e => setUploadSupplier(e.target.value)}><option value="">Определить автоматически</option><option value="IEK">IEK</option><option value="SE">Systeme Electric</option></select></label>
-          </div>
-          <button className="button primary" disabled={!files.length || !!sourceBusy} onClick={() => void importData()}>{sourceBusy === "upload" ? <span className="spinner"/> : <FolderUp size={15}/>} {sourceBusy === "upload" ? "Импортируем и проверяем…" : "Загрузить отчёты"}</button>
-          <ErrorNotice error={sourceError}/>
-          <details className="advanced-policy"><summary className="subtle-summary">Какие файлы нужны <ChevronDown size={12} style={{ display: "inline" }}/></summary>
-            <ul style={{ margin: "8px 0 0", paddingLeft: 18, fontSize: 14, color: "var(--muted)", lineHeight: 1.9 }}>{REQUIRED_REPORTS.map(r => <li key={r}>{r}</li>)}</ul>
-            <p className="chart-caption">Загрузите исходные отчёты поставщика. Файлы сохраняются целиком; замечания к их содержимому будут показаны перед расчётом.</p>
-          </details>
-        </div></section>
-        <section className="card demo-card"><div className="card-body">
-          <div className="demo-symbol"><Database size={26}/></div>
-          <div className="eyebrow">Сохранённые отчёты поставщиков</div>
-          <h2>Использовать данные кейса</h2>
-          <p>Данные кейса из PostgreSQL: исходные отчёты IEK и Systeme Electric, подготовленные для расчёта.</p>
-          {datasetsLoading ? <LoadingState text="Загружаем список наборов…"/> : datasets.length === 0 ? <p className="chart-caption">Наборов для расчёта пока нет. Обновите список после подготовки данных или загрузите свои отчёты.</p> : <div className="dataset-list">
-            {datasets.filter(d => !d.synthetic).map(d => <div className="dataset-list-row" key={d.id}>
-              <div><strong>{d.name}</strong>
+        </section>
+        <section className="card demo-card" aria-labelledby="case-title"><div className="card-body">
+          <div className="demo-symbol"><Database size={24} aria-hidden="true"/></div>
+          <div className="eyebrow">Данные кейса</div>
+          <h2 id="case-title">Использовать данные кейса</h2>
+          <p>Отчёты IEK и Systeme Electric, сохранённые в PostgreSQL. Расчёт выполняется заново — готовых ответов нет.</p>
+          {datasetsLoading ? <LoadingState text="Загружаем список наборов…"/> : caseDatasets.length === 0 ? <p className="chart-caption">Наборов для расчёта пока нет. Загрузите свои отчёты или обновите список.</p> : <div className="dataset-list">
+            {caseDatasets.map(d => <div className="dataset-list-row" key={d.id}>
+              <div style={{ minWidth: 0 }}><strong>{d.name}</strong>
                 <div className="dataset-suppliers">{[...new Set(d.files.map(f => f.supplier).filter(Boolean))].map(s => <SupplierLogo key={s} supplier={String(s)} size="sm"/>)}</div>
                 <div className="product-code">{num(d.productCount)} товаров · данные на {dateLabel(d.cutoffDate)} · загружено {dateLabel(d.createdAt)}</div>
               </div>
-              <button className="button small" onClick={() => { selectDataset(d.id); setSourceOpen(false); }}>Использовать <ArrowRight size={12}/></button>
+              <a className="button small" href={routePath({ kind: "dataset", id: d.id })} onClick={e => { if (e.metaKey || e.ctrlKey || e.shiftKey) return; e.preventDefault(); navigate({ kind: "dataset", id: d.id }); }}>Использовать <ArrowRight size={12} aria-hidden="true"/></a>
             </div>)}
           </div>}
-          <button className="button dark" disabled={!!sourceBusy} onClick={() => void refreshData()} style={{ marginTop: 14 }}>{sourceBusy === "refresh" ? <span className="spinner"/> : <Database size={15}/>} {sourceBusy === "refresh" ? "Обновляем список…" : "Обновить список данных"}<ArrowRight size={14}/></button>
+          <button className="button" disabled={!!sourceBusy} onClick={() => void refreshData()}>{sourceBusy === "refresh" ? <span className="spinner"/> : <Database size={15} aria-hidden="true"/>} {sourceBusy === "refresh" ? "Обновляем список…" : "Обновить список"}</button>
         </div></section>
       </div>
-    </> : null}
+    </>}
 
-    {datasetId && !sourceOpen && <>
+    {!onStart && !datasetId && (runLoading || route.kind === "dataset") && <LoadingState text={route.kind === "run" ? "Открываем сохранённый расчёт…" : "Загружаем данные…"}/>}
+    {!onStart && !datasetId && !runLoading && route.kind === "run" && error && <p className="chart-caption procurement-hint"><button className="button" onClick={() => navigate({ kind: "start" })}>К выбору данных</button></p>}
+
+    {!onStart && datasetId && <>
       <div className="page-heading procurement-heading">
-        <div><h1>Заказ поставщику</h1><p>{dataset ? `Данные на ${dateLabel(dataset.cutoffDate)}` : "Загружаем данные…"}</p></div>
+        <div><h1>Заказ поставщику</h1><p>{dataset ? `${dataset.name} · данные на ${dateLabel(dataset.cutoffDate)}` : "Загружаем данные…"}{run && <> · <span className="route-id" title="Адрес этого расчёта">расчёт {run.id.slice(-8)}</span></>}</p></div>
         <details className="data-actions" onKeyDown={event => { if (event.key === "Escape") { event.currentTarget.open = false; event.currentTarget.querySelector("summary")?.focus(); } }}><summary>Данные <ChevronDown size={14} aria-hidden="true"/></summary><div className="data-actions-menu">
           <button className="button" onClick={() => setExplorerOpen(true)}><Search size={14} aria-hidden="true"/>Просмотреть данные</button>
-          <button className="button" onClick={() => setSourceOpen(true)}><FolderUp size={14} aria-hidden="true"/>Изменить / загрузить отчёты</button>
+          <button className="button" onClick={startNewCalculation}><FolderUp size={14} aria-hidden="true"/>Изменить / загрузить отчёты</button>
           <button className="button" onClick={() => setReviewDialogOpen(true)}><ShieldCheck size={14} aria-hidden="true"/>Проверка расчёта</button>
         </div></details>
       </div>
@@ -314,35 +385,29 @@ export function OrderWorkspace() {
       {datasetsLoading ? <LoadingState/> : <>
         <section className="card procurement-start">
           <div className="card-body">
-            <div className="procurement-controls">
-              <label className="field"><span>Поставщик</span><select value={supplier} onChange={e => { setSupplier(e.target.value); setCategory(""); }}><option value="">Все поставщики</option>{(details?.suppliers || []).map(s => <option key={s.supplier} value={s.supplier}>{supplierLabel(s.supplier)}</option>)}</select></label>
-              <button className="button primary" disabled={!datasetId || !details || calcBusy} onClick={() => void calculate()}>{calcBusy ? <span className="spinner"/> : <Play size={16} aria-hidden="true"/>} {calcBusy ? "Рассчитываем…" : run ? "Пересчитать заказ" : "Рассчитать заказ"}</button>
+            <div className="procurement-layout">
+              <div className="procurement-scope">
+                <ChipSelect label="Поставщики" allLabel="Все поставщики" options={(details?.suppliers || []).map(s => ({ value: s.supplier, label: <><SupplierLogo supplier={s.supplier} size="sm"/><span className="sr-only">{supplierLabel(s.supplier)}</span></> }))}
+                  value={supplierScope} onChange={setSupplierScope}/>
+                <button className="button primary" disabled={!datasetId || !details || calcBusy} onClick={() => void calculate()}>{calcBusy ? <span className="spinner"/> : <Play size={16} aria-hidden="true"/>} {calcBusy ? "Рассчитываем…" : run ? "Пересчитать заказ" : "Рассчитать заказ"}</button>
+              </div>
+              <section className="procurement-params" aria-labelledby="params-title">
+                <h3 id="params-title">Параметры расчёта</h3>
+                <p className="chart-caption">Изменение параметра требует пересчёта. Поиск и фильтры таблицы на расчёт не влияют.</p>
+                <div className="params-grid">
+                  <label className="field"><span>Срок поставки, дней</span><input type="number" min={1} max={365} value={policy.leadTimeDays} onChange={e => updatePolicy("leadTimeDays", Number(e.target.value))}/></label>
+                  <label className="field"><span>Рост спроса, % / год</span><input type="number" min={-95} max={300} placeholder="Из данных" value={policy.growthRate === null ? "" : Number((policy.growthRate * 100).toFixed(2))} onChange={e => updatePolicy("growthRate", e.target.value === "" ? null : Number(e.target.value) / 100)}/></label>
+                  <label className="field"><span>Минимальный запас, дней</span><input type="number" min={0} max={180} value={policy.safetyDays} onChange={e => updatePolicy("safetyDays", Number(e.target.value))}/></label>
+                </div>
+                <div className="policy-toggles"><label className="checkbox-label"><input type="checkbox" checked={policy.stockoutCompensation} onChange={e => updatePolicy("stockoutCompensation", e.target.checked)}/> Компенсация упущенного спроса при дефиците</label><label className="checkbox-label"><input type="checkbox" checked={policy.outlierFiltering} onChange={e => updatePolicy("outlierFiltering", e.target.checked)}/> Исключение разовых заказов из спроса</label></div>
+              </section>
             </div>
             {blocking.length > 0 && <p className="notice warning">В исходных данных есть ошибки. Перед утверждением проверьте отмеченные рекомендации. <button className="button small" onClick={() => setExplorerOpen(true)}>Просмотреть данные</button></p>}
-            {needsRecalc && <div className="notice warning" style={{ marginBottom: 14 }}><TriangleAlert size={13} style={{ display: "inline", verticalAlign: "-2px", marginRight: 6 }}/>Параметры изменены — требуется пересчёт. Таблица ниже показывает результат предыдущего расчёта.</div>}
-            <details className="advanced-policy"><summary className="subtle-summary">Расширенные настройки планирования <ChevronDown size={12} style={{ display: "inline" }}/></summary>
-              {categories.some(c => c && c !== "unknown") && <label className="field category-scope"><span>Категория</span><select value={category} onChange={e => setCategory(e.target.value)}><option value="">Все категории</option>{categories.map(c => <option key={c} value={c}>{categoryLabel(c)}</option>)}</select></label>}
-              <p className="chart-caption">Изменение любого параметра ниже требует нового расчёта. Фильтры таблицы результатов (поиск, срочность) на расчёт не влияют.</p>
-              <div className="inline-controls" style={{ marginTop: 10 }}>
-                <label className="field"><span>Срок поставки, дней</span><input type="number" min={1} max={365} value={policy.leadTimeDays} onChange={e => updatePolicy("leadTimeDays", Number(e.target.value))}/></label>
-                <label className="field"><span>Период обзора, дней</span><input type="number" min={1} max={180} value={policy.reviewDays} onChange={e => updatePolicy("reviewDays", Number(e.target.value))}/></label>
-                <label className="field"><span>Уровень сервиса, %</span><input type="number" min={50} max={99.9} step={.1} value={Number((policy.serviceLevel * 100).toFixed(2))} onChange={e => updatePolicy("serviceLevel", Number(e.target.value) / 100)}/></label>
-                <label className="field"><span>Минимальный запас, дней</span><input type="number" min={0} max={180} value={policy.safetyDays} onChange={e => updatePolicy("safetyDays", Number(e.target.value))}/></label>
-                <label className="field"><span>Рост спроса, % / год</span><input type="number" min={-95} max={300} placeholder="Из данных" value={policy.growthRate === null ? "" : Number((policy.growthRate * 100).toFixed(2))} onChange={e => updatePolicy("growthRate", e.target.value === "" ? null : Number(e.target.value) / 100)}/></label>
-                <label className="field"><span>Как применять рост</span><select value={policy.growthMode} onChange={e => updatePolicy("growthMode", e.target.value as Policy["growthMode"])}><option value="replace">Заменить оценённый тренд</option><option value="additive">Добавить к тренду</option></select></label>
-              </div>
-              <div className="policy-toggles"><label className="checkbox-label"><input type="checkbox" checked={policy.stockoutCompensation} onChange={e => updatePolicy("stockoutCompensation", e.target.checked)}/> Компенсация упущенного спроса при дефиците</label><label className="checkbox-label"><input type="checkbox" checked={policy.outlierFiltering} onChange={e => updatePolicy("outlierFiltering", e.target.checked)}/> Исключение разовых заказов из спроса</label></div>
-              {categories.some(c => c && c !== "unknown") && <><p className="chart-caption" style={{ marginTop: 14 }}>Политики по категориям — необязательные переопределения общих настроек выше.</p>
-              <div className="category-policy-grid">{categories.filter(c => c && c !== "unknown").map(c => <div className="field" key={c}><span>Категория {categoryLabel(c)}</span>
-                <label className="field"><span>Уровень сервиса, %</span><input type="number" min={50} max={99.9} step={.1} aria-label={`Сервис категории ${categoryLabel(c)}`} value={Number(((policy.categoryServiceLevels[c] ?? policy.serviceLevel) * 100).toFixed(2))} onChange={e => updatePolicy("categoryServiceLevels", { ...policy.categoryServiceLevels, [c]: Number(e.target.value) / 100 })}/></label>
-                <label className="field"><span>Минимальный запас, дней</span><input type="number" min={0} max={180} aria-label={`Запас категории ${categoryLabel(c)}`} value={policy.categorySafetyDays[c] ?? policy.safetyDays} onChange={e => updatePolicy("categorySafetyDays", { ...policy.categorySafetyDays, [c]: Number(e.target.value) })}/></label>
-                <label className="field"><span>Резервный спрос, ед./мес</span><input type="number" min={0} placeholder="Из истории" aria-label={`Резервный спрос категории ${categoryLabel(c)}`} value={policy.categoryFallbackDemand[c] ?? ""} onChange={e => updatePolicy("categoryFallbackDemand", { ...policy.categoryFallbackDemand, [c]: e.target.value === "" ? undefined as unknown as number : Number(e.target.value) })}/></label>
-              </div>)}</div></>}
-            </details>
+            {needsRecalc && <div className="notice warning" style={{ marginTop: 14 }}><TriangleAlert size={13} aria-hidden="true" style={{ display: "inline", verticalAlign: "-2px", marginRight: 6 }}/>Параметры изменены — требуется пересчёт. Таблица ниже показывает результат предыдущего расчёта.</div>}
           </div>
         </section>
 
-        {runLoading ? <LoadingState text="Открываем сохранённый расчёт…"/> : !run ? <p className="chart-caption procurement-hint">Выберите поставщика и рассчитайте заказ. Затем проверьте рекомендации и подтвердите количество.</p> : <>
+        {runLoading ? <LoadingState text="Открываем сохранённый расчёт…"/> : !run ? <p className="chart-caption procurement-hint">Выберите поставщика и рассчитайте заказ. Затем проверьте рекомендации и подтвердите количество.{runs[0] && <> Или <a className="inline-link" href={routePath({ kind: "run", id: runs[0].id })} onClick={e => { if (e.metaKey || e.ctrlKey || e.shiftKey) return; e.preventDefault(); openRun(runs[0].id); }}>откройте последний расчёт от {dateLabel(runs[0].createdAt)}</a>.</>}</p> : <>
           <div className="metrics">
             <Metric label="Позиций в расчёте" value={num(recommendations.length)} detail={`${new Set(recommendations.map(r => r.supplier)).size} поставщика · ${dateLabel(run.result.cutoffDate)}`} tone="teal"/>
             <Metric label="Требуют заказа" value={num(recommendations.filter(r => quantity(r) > 0).length)} detail="Потребность после учёта остатков"/>
@@ -351,27 +416,27 @@ export function OrderWorkspace() {
           </div>
           {run.scenarioDelta && (() => { const changed = run.scenarioDelta.filter(d => d.delta !== 0); const baseRunId = runs.find(r => r.id === run.id)?.baseRunId; return <details className="scenario-banner" open>
             <summary>Сценарий: изменилось {num(changed.length)} позиций относительно базового расчёта. Базовый расчёт сохранён.</summary>
-            {baseRunId && <button className="button small" onClick={() => void openRun(baseRunId)} disabled={runLoading}>Вернуться к базовому расчёту</button>}
+            {baseRunId && <button className="button small" onClick={() => openRun(baseRunId)} disabled={runLoading}>Вернуться к базовому расчёту</button>}
             {changed.length > 0 && <div className="scenario-table"><table><thead><tr><th>Позиция</th><th className="number">Было</th><th className="number">Стало</th><th className="number">Изменение</th></tr></thead><tbody>{changed.slice(0, 100).map(d => <tr key={d.key}><td>{d.key}</td><td className="number">{num(d.before)}</td><td className="number">{num(d.after)}</td><td className="number">{d.delta > 0 ? "+" : ""}{num(d.delta)}</td></tr>)}</tbody></table></div>}
           </details>; })()}
           <section className="card">
             <header className="card-header"><div><h2>Рекомендации к заказу <span className="badge" style={{ marginLeft: 8 }}>{num(filtered.length)}</span></h2><p>«Рекомендовано» — расчёт Apollon. «Количество к заказу» можно изменить; изменение снимает утверждение.</p></div>
-              <div className="inline-controls"><label className="sr-only" htmlFor="run-select">Сохранённый расчёт</label><select id="run-select" value={run.id} onChange={e => void openRun(e.target.value)} style={{ fontSize: 13, maxWidth: 230 }} disabled={runLoading}>{runs.map(r => <option key={r.id} value={r.id}>{dateLabel(r.createdAt)} · {new Date(r.createdAt).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" })}{r.baseRunId ? " · сценарий" : ""}</option>)}</select></div>
+              <div className="inline-controls"><label className="sr-only" htmlFor="run-select">Сохранённый расчёт</label><select id="run-select" value={run.id} onChange={e => openRun(e.target.value)} style={{ fontSize: 13, maxWidth: 230 }} disabled={runLoading}>{runs.map(r => <option key={r.id} value={r.id}>{dateLabel(r.createdAt)} · {new Date(r.createdAt).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" })}{r.baseRunId ? " · сценарий" : ""}</option>)}</select></div>
             </header>
             <div className="filters">
               <div className="search-field"><Search size={15}/><input aria-label="Поиск по товарам (не влияет на расчёт)" placeholder="Название, артикул или код — фильтр отображения…" value={query} onChange={e => { setQuery(e.target.value); setPage(0); }}/></div>
               <select aria-label="Фильтр срочности" value={urgency} onChange={e => { setUrgency(e.target.value); setPage(0); }}><option value="">Любая срочность</option><option value="CRITICAL">Критично</option><option value="HIGH">Высокий приоритет</option><option value="NORMAL">Планово</option></select>
-              <label className="checkbox-label"><input type="checkbox" checked={reviewOnly} onChange={e => { setReviewOnly(e.target.checked); setPage(0); }}/> Требуют проверки</label>
+              <label className="checkbox-label"><input type="checkbox" checked={reviewOnly} onChange={e => { setReviewOnly(e.target.checked); setPage(0); }}/> Только требующие проверки ({num(reviewCount)})</label>
               <span className="filter-spacer"/><span className="muted" style={{ fontSize: 13 }}>{selected.length ? `Выбрано: ${selected.length}` : "Группировка по поставщику"}</span>
             </div>
-            <div className="table-scroll"><table><thead><tr>
+            <div className="table-scroll"><table className="order-table"><colgroup><col className="col-check"/><col className="col-name"/><col className="col-num"/><col className="col-num"/><col className="col-num"/><col className="col-rec"/><col className="col-qty"/><col className="col-status"/><col className="col-why"/></colgroup><thead><tr>
               <th><input type="checkbox" aria-label="Выбрать все позиции на странице" checked={visible.length > 0 && visible.every(r => selected.includes(r.key))} onChange={e => setSelected(current => e.target.checked ? [...new Set([...current, ...visible.map(r => r.key)])] : current.filter(k => !visible.some(r => r.key === k)))}/></th>
               <th><button className="table-heading-button" onClick={() => toggleSort("name")}>Наименование / артикул <ArrowUpDown size={11}/></button></th>
               <th className="number">Остаток</th><th className="number">В пути</th>
               <th className="number"><button className="table-heading-button" onClick={() => toggleSort("coverDays")}>Запас, дн. <ArrowUpDown size={11}/></button></th>
-              <th>Рекомендовано</th>
+              <th className="number">Рекомендовано</th>
               <th><button className="table-heading-button" onClick={() => toggleSort("quantity")}>Количество к заказу <ArrowUpDown size={11}/></button></th>
-              <th>Срочность</th><th>Уверенность</th><th>Пояснение</th>
+              <th><button className="table-heading-button" onClick={() => toggleSort("urgency")}>Срочность / уверенность <ArrowUpDown size={11}/></button></th><th>Пояснение</th>
             </tr></thead>
             <tbody>{[...new Set(visible.map(r => r.supplier))].map(s => { const order = run.orders.find(o => o.supplier === s); const rows = visible.filter(r => r.supplier === s); const dirty = order && Object.keys(edits).some(k => k in order.quantities); const selectedKeys = selected.filter(k => recommendations.find(r => r.key === k)?.supplier === s);
               const supplierRows = filtered.filter(r => r.supplier === s), unitTotals = new Map<string, number>();
@@ -380,18 +445,17 @@ export function OrderWorkspace() {
               return <SupplierRows key={s} supplier={s} count={supplierRows.length} unitTotals={unitTotals} costTotal={hasCost ? costTotal : null} costMissing={costMissing} order={order} dirty={!!dirty} busy={!!rowBusy} onSave={() => order && void saveEdits(order)} onApprove={() => { if (order) { setApproval({ order, keys: selectedKeys.length ? selectedKeys : undefined }); setAcknowledged(false); setError(""); } }} onAudit={() => order && void showAudit(order)} onDownload={format => order && void download(order, format)} selectedCount={selectedKeys.length}>
                 {rows.map(r => <tr key={r.key}>
                   <td><input type="checkbox" aria-label={`Выбрать ${r.code}`} checked={selected.includes(r.key)} onChange={() => toggleKey(r.key)}/></td>
-                  <td><span className="product-name" title={r.name}>{r.name}</span><span className="product-code">{r.supplierArticle || r.code} · {r.unit} <span className="badge" style={{ fontSize: 12, padding: "1px 4px", marginLeft: 4 }}>{r.abc}{r.xyz}</span>{r.needsReview && <span className="badge warning" style={{ marginLeft: 5 }}>Требует проверки</span>}</span></td>
+                  <td className="name-cell"><button type="button" className="product-name" title={r.name} onClick={() => setDrawerKey(r.key)}>{r.name}</button><span className="product-code">{r.supplierArticle || r.code} · {unitLabel(r.unit)} <span className="badge tiny">{r.abc}{r.xyz}</span>{r.needsReview && <span className="badge warning tiny">Требует проверки</span>}</span></td>
                   <td className="number">{r.provenance.stockKind === "current" ? num(r.provenance.availableStock, 1) : r.provenance.stockKind === "unknown" ? "нет данных" : <>{num(r.provenance.availableStock, 1)}<span className="product-code">оценка</span></>}</td>
                   <td className="number">{num(r.provenance.eligibleInbound, 1)}</td>
                   <td className="number">{r.coverDays == null ? "нет данных" : num(r.coverDays, 1)}</td>
-                  <td className="number">{num(r.quantity)} {r.unit}</td>
+                  <td className="number">{num(r.quantity)} <span className="unit-label">{unitLabel(r.unit)}</span></td>
                   <QuantityCell rec={r} value={edits[r.key] ?? quantity(r)} edited={r.key in edits} approved={!!order?.approvedKeys.includes(r.key)} onChange={v => setEdits(current => ({ ...current, [r.key]: v }))} onReset={() => setEdits(current => { const next = { ...current }; delete next[r.key]; return next; })}/>
-                  <td><span className={`badge ${r.urgency}`}>{urgencyLabels[r.urgency]}</span></td>
-                  <td><span className={`badge ${r.confidence}-confidence`}>{confidenceLabels[r.confidence]}</span></td>
-                  <td><button className="button explanation-button" onClick={() => setDrawerKey(r.key)}>Смотреть объяснение<ArrowRight size={16} aria-hidden="true"/></button></td>
+                  <td><div className="status-stack"><span className={`badge ${r.urgency}`}>{urgencyLabels[r.urgency]}</span><span className={`badge ${r.confidence}-confidence`} title="Уверенность прогноза">{confidenceLabels[r.confidence]}</span></div></td>
+                  <td><button className="button small explanation-button" aria-label={`Пояснение: ${r.name}`} onClick={() => setDrawerKey(r.key)}>Почему <ArrowRight size={13} aria-hidden="true"/></button></td>
                 </tr>)}
               </SupplierRows>; })}
-              {visible.length === 0 && <tr><td colSpan={10} style={{ textAlign: "center", padding: 35, color: "var(--muted)" }}>Нет позиций по выбранным условиям отображения</td></tr>}
+              {visible.length === 0 && <tr><td colSpan={9} style={{ textAlign: "center", padding: 35, color: "var(--muted)" }}>Нет позиций по выбранным условиям отображения</td></tr>}
             </tbody></table></div>
             <footer className="card-footer"><span>{filtered.length ? `${activePage * pageSize + 1}–${Math.min((activePage + 1) * pageSize, filtered.length)}` : "0"} из {num(filtered.length)} позиций · {hasEdits ? <span className="save-hint">Есть несохранённые изменения</span> : "Данные расчёта сохранены"}</span><div className="pager"><button aria-label="Предыдущая страница" disabled={activePage === 0} onClick={() => setPage(p => p - 1)}><ChevronLeft size={13}/></button><span>{activePage + 1} / {pageCount}</span><button aria-label="Следующая страница" disabled={activePage >= pageCount - 1} onClick={() => setPage(p => p + 1)}><ChevronRight size={13}/></button></div></footer>
           </section>
@@ -419,7 +483,7 @@ export function OrderWorkspace() {
     {audit && <div className="modal-backdrop"><section className="modal" role="dialog" aria-modal="true" aria-labelledby="audit-title"><header><h2 id="audit-title">История · {supplierLabel(audit.supplier)}</h2><button className="icon-button" aria-label="Закрыть историю" onClick={() => setAudit(undefined)}><X size={18}/></button></header><div className="modal-body">{audit.events.length ? audit.events.map(e => <div className="audit-row" key={e.id}><FileClock size={16}/><div><strong>{e.action || e.type || "Изменение"}</strong>{e.actor && <p>{e.actor}</p>}<pre>{JSON.stringify(e.payload || e.details || {}, null, 2)}</pre><small>{new Date(e.createdAt).toLocaleString("ru-RU")}</small></div></div>) : <p>Событий пока нет.</p>}</div></section></div>}
 
     {/* Drawer: §8 */}
-    {drawerKey && run && (() => { const rec = recommendations.find(r => r.key === drawerKey); return rec ? <div className="drawer-backdrop" onClick={() => setDrawerKey(undefined)}><aside className="drawer" role="dialog" aria-modal="true" aria-labelledby="drawer-title" onClick={e => e.stopPropagation()}><div className="drawer-header"><div><h2 id="drawer-title">{rec.name}</h2><p className="drawer-supplier"><SupplierLogo supplier={rec.supplier} size="sm"/>{rec.supplierArticle || rec.code} · {supplierLabel(rec.supplier)}</p></div><button className="icon-button" aria-label="Закрыть обоснование" onClick={() => setDrawerKey(undefined)}><X size={18}/></button></div><div className="drawer-body"><SkuDetailBody rec={rec} runId={run.id} datasetId={run.datasetId} onScenario={newRunId => { const baseRunId = run.id; setDrawerKey(undefined); setRuns(r => [{ id: newRunId, createdAt: new Date().toISOString(), baseRunId }, ...r.filter(x => x.id !== newRunId)]); void openRun(newRunId, "Открыт пересчитанный сценарий. Базовый расчёт сохранён в истории."); }}/></div></aside></div> : null; })()}
+    {drawerKey && run && (() => { const rec = recommendations.find(r => r.key === drawerKey); return rec ? <div className="drawer-backdrop" onClick={() => setDrawerKey(undefined)}><aside className="drawer" role="dialog" aria-modal="true" aria-labelledby="drawer-title" onClick={e => e.stopPropagation()}><div className="drawer-header"><div><h2 id="drawer-title">{rec.name}</h2><p className="drawer-supplier"><SupplierLogo supplier={rec.supplier} size="sm"/>{rec.supplierArticle || rec.code} · {supplierLabel(rec.supplier)}</p></div><button className="icon-button" aria-label="Закрыть обоснование" onClick={() => setDrawerKey(undefined)}><X size={18}/></button></div><div className="drawer-body"><SkuDetailBody rec={rec} runId={run.id} datasetId={run.datasetId} onScenario={newRunId => { const baseRunId = run.id; setDrawerKey(undefined); addRun(run.datasetId, { id: newRunId, createdAt: new Date().toISOString(), baseRunId }); openRun(newRunId, "Открыт пересчитанный сценарий. Базовый расчёт сохранён в истории."); }}/></div></aside></div> : null; })()}
 
     {/* Data explorer dialog: §4 "Просмотреть данные" */}
     {explorerOpen && <div className="modal-backdrop" onClick={() => setExplorerOpen(false)}><section className="modal wide" role="dialog" aria-modal="true" aria-labelledby="explorer-title" onClick={e => e.stopPropagation()}><header><h2 id="explorer-title">Все загруженные данные</h2><button className="icon-button" aria-label="Закрыть" onClick={() => setExplorerOpen(false)}><X size={18}/></button></header><div className="modal-body"><DataExplorer/></div></section></div>}
@@ -432,7 +496,7 @@ export function OrderWorkspace() {
       <ErrorNotice error={historyError}/>
       {!history ? <LoadingState text="Загружаем историю…"/> : history.length === 0 ? <p>Расчётов пока нет.</p> : <div className="history-list">{history.map(h => <button key={h.id} className="history-row" onClick={() => openHistoryEntry(h)}>
         <div><strong>{dateLabel(h.createdAt)}</strong> <span className="product-code">{new Date(h.createdAt).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" })}</span></div>
-        <div className="product-code">{h.datasetName} · <span className={`badge ${h.synthetic ? "demo" : "teal"}`} style={{ fontSize: 12 }}>{h.synthetic ? "Демо" : "Кейс"}</span> · {h.scope?.supplier ? supplierLabel(h.scope.supplier) : "все поставщики"}{h.scope?.category ? ` · ${categoryLabel(h.scope.category)}` : ""}</div>
+        <div className="product-code">{h.datasetName} · <span className={`badge ${h.synthetic ? "demo" : "teal"}`} style={{ fontSize: 12 }}>{h.synthetic ? "Демо" : "Кейс"}</span> · {h.scope?.suppliers?.length ? h.scope.suppliers.map(supplierLabel).join(", ") : h.scope?.supplier ? supplierLabel(h.scope.supplier) : "все поставщики"}{h.scope?.category ? ` · ${categoryLabel(h.scope.category)}` : ""}</div>
         <div className="history-orders">{h.orders.map(o => <span key={o.supplier} className={`badge ${o.status}`}>{supplierLabel(o.supplier)}: {o.status === "APPROVED" ? `утверждён v${o.revision}` : "черновик"}</span>)}</div>
       </button>)}</div>}
     </div></section></div>}
@@ -470,7 +534,19 @@ function QuantityCell({ rec, value, edited, approved, onChange, onReset }: { rec
   </td>;
 }
 function SupplierRows({ supplier, count, unitTotals, costTotal, costMissing, order, dirty, busy, onSave, onApprove, onAudit, onDownload, selectedCount, children }: { supplier: string; count: number; unitTotals: Map<string, number>; costTotal: number | null; costMissing: number; order?: OrderView; dirty: boolean; busy: boolean; onSave: () => void; onApprove: () => void; onAudit: () => void; onDownload: (format: string) => void; selectedCount: number; children: React.ReactNode }) {
-  return <><tr className="supplier-row"><td colSpan={10}><div className="supplier-heading"><SupplierLogo supplier={supplier}/><strong>{supplierLabel(supplier)}</strong><small>{num(count)} позиций · {[...unitTotals].map(([unit, qty]) => `${num(qty, 1)} ${unit}`).join(" + ")} · {costTotal == null ? "₸ —" : costMissing ? `₸ ≥${num(costTotal)} (без цены: ${num(costMissing)} поз.)` : `₸ ${num(costTotal)}`}</small>{order && <span className={`badge ${order.status}`}>{order.status === "APPROVED" ? "Утверждён" : "Черновик"} · v{order.revision}</span>}<div className="supplier-actions">{dirty && <button className="button small" onClick={onSave} disabled={busy}><Save size={12}/> Сохранить</button>}<button className="icon-button" title="История изменений" aria-label={`История ${supplier}`} onClick={onAudit}><FileClock size={15}/></button><button className="button small" onClick={onApprove} disabled={busy || dirty || !order}><Check size={12}/>{selectedCount ? `Утвердить ${selectedCount}` : "Утвердить"}</button>{order?.status === "APPROVED" && <><button className="button small" onClick={() => onDownload("xlsx")} disabled={busy || dirty}><ArrowDownToLine size={12}/> XLSX</button><button className="button small" onClick={() => onDownload("csv")} disabled={busy || dirty}>CSV</button><button className="button small" onClick={() => onDownload("email")} disabled={busy || dirty}>Письмо</button></>}</div></div></td></tr>{children}</>;
+  return <><tr className="supplier-row"><td colSpan={9}><div className="supplier-heading"><SupplierLogo supplier={supplier}/><strong>{supplierLabel(supplier)}</strong><small>{num(count)} позиций · {[...unitTotals].map(([unit, qty]) => `${num(qty, 1)} ${unitLabel(unit)}`).join(" + ")} · {costTotal == null ? "₸ —" : costMissing ? `₸ ≥${num(costTotal)} (без цены: ${num(costMissing)} поз.)` : `₸ ${num(costTotal)}`}</small>{order && <span className={`badge ${order.status}`}>{order.status === "APPROVED" ? "Утверждён" : "Черновик"} · v{order.revision}</span>}<div className="supplier-actions">{dirty && <button className="button small" onClick={onSave} disabled={busy}><Save size={12}/> Сохранить</button>}<button className="icon-button" title="История изменений" aria-label={`История ${supplier}`} onClick={onAudit}><FileClock size={15}/></button><button className="button small" onClick={onApprove} disabled={busy || dirty || !order}><Check size={12}/>{selectedCount ? `Утвердить ${selectedCount}` : "Утвердить"}</button>{order?.status === "APPROVED" && <><button className="button small" onClick={() => onDownload("xlsx")} disabled={busy || dirty}><ArrowDownToLine size={12}/> XLSX</button><button className="button small" onClick={() => onDownload("csv")} disabled={busy || dirty}>CSV</button><button className="button small" onClick={() => onDownload("email")} disabled={busy || dirty}>Письмо</button></>}</div></div></td></tr>{children}</>;
+}
+
+/** Multi-select as toggle chips. Nothing selected = all; "all" clears the selection. */
+function ChipSelect({ label, allLabel, options, value, onChange }: { label: string; allLabel: string; options: { value: string; label: React.ReactNode }[]; value: string[]; onChange: (next: string[]) => void }) {
+  const toggle = (v: string) => { const next = value.includes(v) ? value.filter(x => x !== v) : [...value, v]; onChange(next.length === options.length ? [] : next); };
+  return <div className="chip-select" role="group" aria-label={label}>
+    <span className="chip-select-label">{label}</span>
+    <div className="chip-row">
+      <button type="button" className="chip" aria-pressed={value.length === 0} onClick={() => onChange([])}>{value.length === 0 && <Check size={13} aria-hidden="true"/>}{allLabel}</button>
+      {options.map(o => { const on = value.includes(o.value); return <button type="button" key={o.value} className="chip" aria-pressed={on} onClick={() => toggle(o.value)}>{on && <Check size={13} aria-hidden="true"/>}{o.label}</button>; })}
+    </div>
+  </div>;
 }
 
 const SUPPLIER_LOGOS: Record<string, { src: string; width: number; height: number }> = {

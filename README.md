@@ -4,7 +4,7 @@
 
 Explainable supplier replenishment for ТОО «Электрокомплект»: import IEK and Systeme Electric workbooks, review demand corrections and stock risk, calculate a purchase plan, approve a frozen revision, and download supplier drafts. The calculation is deterministic; an optional OpenAI assistant explains and invokes the same application services.
 
-**Status: single-page UI and lossless source import implemented.** `npm run typecheck`, `npm run lint`, `npm test` (105 checks) and `npm run build` all pass. The manager UI is now **one page at `/`** (`components/order-workspace.tsx`) covering the full journey — choose data, validate, calculate, review, adjust, approve, export — with a checks/backtest/trends dialog and a history panel, replacing the earlier multi-page app. The old routes `/import`, `/plan`, `/data`, `/checks`, `/backtest`, `/trends` and `/plan/[runId]/sku/[code]` were removed and now 404; their logic lives in API routes (`/api/import`, `/api/runs`, `/api/checks`, `/api/backtest`, `/api/trends`, `/api/history`) called from the single page. A Railway deployment exists at **https://apollon-production-59ea.up.railway.app**; releases are manually uploaded and verified by exact deployment ID. See [Known limitations](#limitations-and-safety) for the full list, and [the runbook](docs/runbook.md) for current deployment/data status.
+**Status: single-page UI and lossless source import implemented.** `npm run typecheck`, `npm run lint`, `npm test` (105 checks) and `npm run build` all pass. The manager UI is now **one workspace with addressable URLs** (`/`, `/datasets/<id>`, `/runs/<id>`) (`components/order-workspace.tsx`) covering the full journey — choose data, validate, calculate, review, adjust, approve, export — with a checks/backtest/trends dialog and a history panel, replacing the earlier multi-page app. The old routes `/import`, `/plan`, `/data`, `/checks`, `/backtest`, `/trends` and `/plan/[runId]/sku/[code]` were removed and now 404; their logic lives in API routes (`/api/import`, `/api/runs`, `/api/checks`, `/api/backtest`, `/api/trends`, `/api/history`) called from the single page. A Railway deployment exists at **https://apollon-production-59ea.up.railway.app**; releases are manually uploaded and verified by exact deployment ID. See [Known limitations](#limitations-and-safety) for the full list, and [the runbook](docs/runbook.md) for current deployment/data status.
 
 ## Run from a clean checkout
 
@@ -22,14 +22,14 @@ Migrations and source imports are explicit operations documented in [source impo
 
 ## Manager walkthrough
 
-The procurement manager works on one page at `/`:
+The procurement manager works in one workspace. Every state has its own URL: `/` (choose data), `/datasets/<id>` (validate + calculate), `/runs/<id>` (a saved calculation) and `?sku=<key>` (an open explanation). Links can be shared, reloaded and navigated with browser Back/Forward.
 
-1. The current case dataset is selected automatically. Check the data date, choose a supplier and click **«Рассчитать заказ»**. Category scope and policy adjustments remain in advanced settings.
-2. Review recommendations grouped by supplier: article, quantity, urgency and **«Смотреть объяснение»**. The explanation shows demand, stock, expected arrivals, rounding and assumptions. Unknown facts remain explicit.
+1. On `/`, either **upload your own reports** or pick a saved case dataset. The upload card has six labelled slots, one per partner report: monthly sales, monthly stock, goods in transit, MOQ/multiples, sales dynamics and seasonality. Dropping several files at once assigns each file to a slot by its name. Unrecognised names and non-`.xlsx` files are reported, never guessed. Missing reports do not block the upload; the data check flags them. Then pick one or more suppliers (chips; none = all) and click **«Рассчитать заказ»**. The calculation parameters sit on the right of the card, always visible: lead time, annual growth, minimum stock days, and the stockout-compensation / one-off-order exclusion switches. Category service levels are applied automatically from the engine defaults.
+2. Review recommendations grouped by supplier: article, quantity, urgency/confidence and **«Почему»** (or click the product name), 100 rows per page. The explanation shows demand, stock, expected arrivals, rounding and assumptions. Unknown facts remain explicit.
 3. Adjust order quantities, approve with a named responsible person and acknowledge required estimates. Edits invalidate approval; exports use the frozen approved revision.
 4. Download XLSX/CSV or an email draft. The app never dispatches orders automatically.
 
-**«Просмотреть данные»** opens source files, categories and diagnostic details. Verification/backtest/trends and history are secondary views; counts and import warnings do not fill the opening screen. **«Изменить данные»** provides dataset selection and workbook upload. Uploads archive the source before interpreting its PostgreSQL rows. Copilot is optional and cannot approve or send orders.
+**«Просмотреть данные»** opens source files, categories and diagnostic details. Verification/backtest/trends and history are secondary views; counts and import warnings do not fill the opening screen. **«Изменить / загрузить отчёты»** (or **«Новый расчёт»**) returns to `/`. Uploads archive the source before interpreting its PostgreSQL rows. Copilot is optional and cannot approve or send orders.
 
 ## Data in PostgreSQL
 

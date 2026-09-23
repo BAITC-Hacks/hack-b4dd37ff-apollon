@@ -18,7 +18,6 @@ export function SkuDetailBody({ rec, runId, datasetId, onScenario }: { rec: Reco
     setBusy(anomalyId); setError("");
     try {
       const result = await api<{ run: { id: string } }>("/api/runs", { method: "POST", body: JSON.stringify({ datasetId, baseRunId: runId, policy: { restoredAnomalyIds: [anomalyId] } }) });
-      localStorage.setItem(`apollon.run.${datasetId}`, result.run.id);
       onScenario?.(result.run.id);
     } catch (e) { setError(e instanceof Error ? e.message : "Не удалось пересчитать"); }
     finally { setBusy(""); }
