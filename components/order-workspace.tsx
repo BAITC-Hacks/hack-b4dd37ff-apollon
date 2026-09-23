@@ -6,7 +6,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowDownToLine, ArrowRight, ArrowUpDown, Check, CheckCheck, ChevronDown, ChevronLeft, ChevronRight,
   Database, FileClock, FileSpreadsheet, FolderUp, History, Play, Save, Search,
-  ShieldCheck, Sparkles, TriangleAlert, UploadCloud, X,
+  ShieldCheck, Sparkles, UploadCloud, X,
 } from "lucide-react";
 import type { DatasetSummary, OrderView, RunView } from "@/lib/contracts/api";
 import { DEFAULT_POLICY, type Policy, type Recommendation } from "@/lib/contracts/engine";
@@ -68,10 +68,8 @@ export function OrderWorkspace({ initialRoute, initialSku }: { initialRoute: Rou
 
   // ---- Calculation scope / policy ----
   const [policy, setPolicy] = useState<Policy>(DEFAULT_POLICY);
-  const [committedPolicy, setCommittedPolicy] = useState<Policy>(DEFAULT_POLICY);
   // Empty selection means "all suppliers".
   const [supplierScope, setSupplierScope] = useState<string[]>([]);
-  const [committedSuppliers, setCommittedSuppliers] = useState<string[]>([]);
 
   // ---- Runs ----
   const [runsState, setRunsState] = useState<{ datasetId: string; runs: RunSummary[] }>({ datasetId: "", runs: [] });
@@ -115,14 +113,13 @@ export function OrderWorkspace({ initialRoute, initialSku }: { initialRoute: Rou
   const issues = useMemo(() => (details?.suppliers || []).flatMap(s => s.issues.map(i => ({ ...i, supplier: i.supplier || s.supplier }))), [details]);
   const blocking = issues.filter(i => i.severity === "error");
   const hasEdits = !!run && Object.keys(edits).length > 0;
-  const needsRecalc = !!run && (JSON.stringify(policy) !== JSON.stringify(committedPolicy) || supplierScope.join() !== committedSuppliers.join());
 
   function addRun(forDataset: string, entry: RunSummary) {
     setRunsState(current => ({ datasetId: forDataset, runs: [entry, ...(current.datasetId === forDataset ? current.runs.filter(r => r.id !== entry.id) : [])] }));
   }
   function applyRun(loaded: RunView) {
     runRef.current = { id: loaded.id, datasetId: loaded.datasetId };
-    setRun(loaded); setPolicy(loaded.result.policy); setCommittedPolicy(loaded.result.policy);
+    setRun(loaded); setPolicy(loaded.result.policy);
     setEdits({}); setSelected([]); setPage(0);
   }
 
@@ -184,7 +181,6 @@ export function OrderWorkspace({ initialRoute, initialSku }: { initialRoute: Rou
     try {
       const result = await api<{ run: RunView }>("/api/runs", { method: "POST", body: JSON.stringify({ datasetId, policy, ...(supplierScope.length ? { suppliers: supplierScope } : {}) }) });
       applyRun(result.run);
-      setCommittedPolicy(policy); setCommittedSuppliers(supplierScope);
       addRun(result.run.datasetId, { id: result.run.id, createdAt: result.run.createdAt, baseRunId: null });
       navigate({ kind: "run", id: result.run.id });
       setSuccess("Расчёт готов. Проверьте рекомендации перед утверждением.");
@@ -205,6 +201,7 @@ export function OrderWorkspace({ initialRoute, initialSku }: { initialRoute: Rou
     });
   }, [recommendations, urgency, reviewOnly, query, sort]);
   const reviewCount = useMemo(() => recommendations.filter(r => r.needsReview).length, [recommendations]);
+  const urgencyCounts = useMemo(() => { const counts = { CRITICAL: 0, HIGH: 0, NORMAL: 0 }; for (const r of recommendations) counts[r.urgency]++; return counts; }, [recommendations]);
   const pageSize = PAGE_SIZE; const pageCount = Math.max(1, Math.ceil(filtered.length / pageSize)); const activePage = Math.min(page, pageCount - 1); const visible = filtered.slice(activePage * pageSize, (activePage + 1) * pageSize);
   function toggleSort(key: typeof sort.key) { setSort(s => ({ key, direction: s.key === key ? -s.direction : 1 })); }
   function toggleKey(key: string) { setSelected(s => s.includes(key) ? s.filter(k => k !== key) : [...s, key]); }
@@ -262,7 +259,7 @@ export function OrderWorkspace({ initialRoute, initialSku }: { initialRoute: Rou
     resetToSource();
   }
   function resetToSource() {
-    setPolicy(DEFAULT_POLICY); setCommittedPolicy(DEFAULT_POLICY); setSupplierScope([]); setCommittedSuppliers([]);
+    setPolicy(DEFAULT_POLICY); setSupplierScope([]);
     setError(""); setSuccess(""); setConfirmNewCalc(false);
     navigate({ kind: "start" });
   }
@@ -299,7 +296,7 @@ export function OrderWorkspace({ initialRoute, initialSku }: { initialRoute: Rou
     <header className="app-header">
       <Link className="app-brand" href="/" onClick={e => { if (e.metaKey || e.ctrlKey || e.shiftKey) return; e.preventDefault(); startNewCalculation(); }}>
         <Image src="/brand/ekt-logo-256.png" alt="" width={38} height={38} className="app-brand-logo"/>
-        <div className="app-brand-text"><span>Apollon</span><small>закуп для ТОО «Электрокомплект»</small></div>
+        <div className="app-brand-text"><span>Решение соло-команды Apollon</span><small>закуп для ТОО «Электрокомплект»</small></div>
       </Link>
       <div className="app-header-actions">
         {!onStart && <button className="button" onClick={startNewCalculation}><Sparkles size={14} aria-hidden="true"/> Новый расчёт</button>}
@@ -399,15 +396,13 @@ export function OrderWorkspace({ initialRoute, initialSku }: { initialRoute: Rou
                   <label className="field"><span>Рост спроса, % / год</span><input type="number" min={-95} max={300} placeholder="Из данных" value={policy.growthRate === null ? "" : Number((policy.growthRate * 100).toFixed(2))} onChange={e => updatePolicy("growthRate", e.target.value === "" ? null : Number(e.target.value) / 100)}/></label>
                   <label className="field"><span>Минимальный запас, дней</span><input type="number" min={0} max={180} value={policy.safetyDays} onChange={e => updatePolicy("safetyDays", Number(e.target.value))}/></label>
                 </div>
-                <div className="policy-toggles"><label className="checkbox-label"><input type="checkbox" checked={policy.stockoutCompensation} onChange={e => updatePolicy("stockoutCompensation", e.target.checked)}/> Компенсация упущенного спроса при дефиците</label><label className="checkbox-label"><input type="checkbox" checked={policy.outlierFiltering} onChange={e => updatePolicy("outlierFiltering", e.target.checked)}/> Исключение разовых заказов из спроса</label></div>
               </section>
             </div>
             {blocking.length > 0 && <p className="notice warning">В исходных данных есть ошибки. Перед утверждением проверьте отмеченные рекомендации. <button className="button small" onClick={() => setExplorerOpen(true)}>Просмотреть данные</button></p>}
-            {needsRecalc && <div className="notice warning" style={{ marginTop: 14 }}><TriangleAlert size={13} aria-hidden="true" style={{ display: "inline", verticalAlign: "-2px", marginRight: 6 }}/>Параметры изменены — требуется пересчёт. Таблица ниже показывает результат предыдущего расчёта.</div>}
           </div>
         </section>
 
-        {runLoading ? <LoadingState text="Открываем сохранённый расчёт…"/> : !run ? <p className="chart-caption procurement-hint">Выберите поставщика и рассчитайте заказ. Затем проверьте рекомендации и подтвердите количество.{runs[0] && <> Или <a className="inline-link" href={routePath({ kind: "run", id: runs[0].id })} onClick={e => { if (e.metaKey || e.ctrlKey || e.shiftKey) return; e.preventDefault(); openRun(runs[0].id); }}>откройте последний расчёт от {dateLabel(runs[0].createdAt)}</a>.</>}</p> : <>
+        {runLoading ? <LoadingState text="Открываем сохранённый расчёт…"/> : !run ? null : <>
           <div className="metrics">
             <Metric label="Позиций в расчёте" value={num(recommendations.length)} detail={`${new Set(recommendations.map(r => r.supplier)).size} поставщика · ${dateLabel(run.result.cutoffDate)}`} tone="teal"/>
             <Metric label="Требуют заказа" value={num(recommendations.filter(r => quantity(r) > 0).length)} detail="Потребность после учёта остатков"/>
@@ -419,24 +414,28 @@ export function OrderWorkspace({ initialRoute, initialSku }: { initialRoute: Rou
             {baseRunId && <button className="button small" onClick={() => openRun(baseRunId)} disabled={runLoading}>Вернуться к базовому расчёту</button>}
             {changed.length > 0 && <div className="scenario-table"><table><thead><tr><th>Позиция</th><th className="number">Было</th><th className="number">Стало</th><th className="number">Изменение</th></tr></thead><tbody>{changed.slice(0, 100).map(d => <tr key={d.key}><td>{d.key}</td><td className="number">{num(d.before)}</td><td className="number">{num(d.after)}</td><td className="number">{d.delta > 0 ? "+" : ""}{num(d.delta)}</td></tr>)}</tbody></table></div>}
           </details>; })()}
-          <section className="card">
+          <section className="card order-card">
             <header className="card-header"><div><h2>Рекомендации к заказу <span className="badge" style={{ marginLeft: 8 }}>{num(filtered.length)}</span></h2><p>«Рекомендовано» — расчёт Apollon. «Количество к заказу» можно изменить; изменение снимает утверждение.</p></div>
               <div className="inline-controls"><label className="sr-only" htmlFor="run-select">Сохранённый расчёт</label><select id="run-select" value={run.id} onChange={e => openRun(e.target.value)} style={{ fontSize: 13, maxWidth: 230 }} disabled={runLoading}>{runs.map(r => <option key={r.id} value={r.id}>{dateLabel(r.createdAt)} · {new Date(r.createdAt).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" })}{r.baseRunId ? " · сценарий" : ""}</option>)}</select></div>
             </header>
             <div className="filters">
               <div className="search-field"><Search size={15}/><input aria-label="Поиск по товарам (не влияет на расчёт)" placeholder="Название, артикул или код — фильтр отображения…" value={query} onChange={e => { setQuery(e.target.value); setPage(0); }}/></div>
-              <select aria-label="Фильтр срочности" value={urgency} onChange={e => { setUrgency(e.target.value); setPage(0); }}><option value="">Любая срочность</option><option value="CRITICAL">Критично</option><option value="HIGH">Высокий приоритет</option><option value="NORMAL">Планово</option></select>
-              <label className="checkbox-label"><input type="checkbox" checked={reviewOnly} onChange={e => { setReviewOnly(e.target.checked); setPage(0); }}/> Только требующие проверки ({num(reviewCount)})</label>
-              <span className="filter-spacer"/><span className="muted" style={{ fontSize: 13 }}>{selected.length ? `Выбрано: ${selected.length}` : "Группировка по поставщику"}</span>
+              <div className="chip-row" role="group" aria-label="Срочность">
+                {([["", "Все", recommendations.length], ["CRITICAL", "Критично", urgencyCounts.CRITICAL], ["HIGH", "Высокий", urgencyCounts.HIGH], ["NORMAL", "Планово", urgencyCounts.NORMAL]] as const).map(([value, label, count]) =>
+                  <button type="button" key={value || "all"} className={`chip small ${value ? `chip-${value}` : ""}`} aria-pressed={urgency === value} onClick={() => { setUrgency(value); setPage(0); }}>{label}<span className="chip-count">{num(count)}</span></button>)}
+              </div>
+              <span className="filters-divider" aria-hidden="true"/>
+              <button type="button" className="chip small chip-review" aria-pressed={reviewOnly} onClick={() => { setReviewOnly(v => !v); setPage(0); }}>{reviewOnly && <Check size={13} aria-hidden="true"/>}Требуют проверки<span className="chip-count">{num(reviewCount)}</span></button>
+              <span className="filter-spacer"/>{selected.length > 0 && <span className="filters-selected">Выбрано: {num(selected.length)}</span>}
             </div>
-            <div className="table-scroll"><table className="order-table"><colgroup><col className="col-check"/><col className="col-name"/><col className="col-num"/><col className="col-num"/><col className="col-num"/><col className="col-rec"/><col className="col-qty"/><col className="col-status"/><col className="col-why"/></colgroup><thead><tr>
+            <div className="table-scroll"><table className="order-table"><colgroup><col className="col-check"/><col className="col-name"/><col className="col-why"/><col className="col-num"/><col className="col-num"/><col className="col-num"/><col className="col-rec"/><col className="col-qty"/><col className="col-status"/></colgroup><thead><tr>
               <th><input type="checkbox" aria-label="Выбрать все позиции на странице" checked={visible.length > 0 && visible.every(r => selected.includes(r.key))} onChange={e => setSelected(current => e.target.checked ? [...new Set([...current, ...visible.map(r => r.key)])] : current.filter(k => !visible.some(r => r.key === k)))}/></th>
-              <th><button className="table-heading-button" onClick={() => toggleSort("name")}>Наименование / артикул <ArrowUpDown size={11}/></button></th>
+              <th><button className="table-heading-button" onClick={() => toggleSort("name")}>Наименование / артикул <ArrowUpDown size={11}/></button></th><th>Пояснение</th>
               <th className="number">Остаток</th><th className="number">В пути</th>
               <th className="number"><button className="table-heading-button" onClick={() => toggleSort("coverDays")}>Запас, дн. <ArrowUpDown size={11}/></button></th>
               <th className="number">Рекомендовано</th>
               <th><button className="table-heading-button" onClick={() => toggleSort("quantity")}>Количество к заказу <ArrowUpDown size={11}/></button></th>
-              <th><button className="table-heading-button" onClick={() => toggleSort("urgency")}>Срочность / уверенность <ArrowUpDown size={11}/></button></th><th>Пояснение</th>
+              <th><button className="table-heading-button" onClick={() => toggleSort("urgency")}>Срочность / уверенность <ArrowUpDown size={11}/></button></th>
             </tr></thead>
             <tbody>{[...new Set(visible.map(r => r.supplier))].map(s => { const order = run.orders.find(o => o.supplier === s); const rows = visible.filter(r => r.supplier === s); const dirty = order && Object.keys(edits).some(k => k in order.quantities); const selectedKeys = selected.filter(k => recommendations.find(r => r.key === k)?.supplier === s);
               const supplierRows = filtered.filter(r => r.supplier === s), unitTotals = new Map<string, number>();
@@ -446,13 +445,13 @@ export function OrderWorkspace({ initialRoute, initialSku }: { initialRoute: Rou
                 {rows.map(r => <tr key={r.key}>
                   <td><input type="checkbox" aria-label={`Выбрать ${r.code}`} checked={selected.includes(r.key)} onChange={() => toggleKey(r.key)}/></td>
                   <td className="name-cell"><button type="button" className="product-name" title={r.name} onClick={() => setDrawerKey(r.key)}>{r.name}</button><span className="product-code">{r.supplierArticle || r.code} · {unitLabel(r.unit)} <span className="badge tiny">{r.abc}{r.xyz}</span>{r.needsReview && <span className="badge warning tiny">Требует проверки</span>}</span></td>
+                  <td><button className="button small explanation-button" aria-label={`Детальный отчёт: ${r.name}`} onClick={() => setDrawerKey(r.key)}>Детальный отчёт <ArrowRight size={13} aria-hidden="true"/></button></td>
                   <td className="number">{r.provenance.stockKind === "current" ? num(r.provenance.availableStock, 1) : r.provenance.stockKind === "unknown" ? "нет данных" : <>{num(r.provenance.availableStock, 1)}<span className="product-code">оценка</span></>}</td>
                   <td className="number">{num(r.provenance.eligibleInbound, 1)}</td>
                   <td className="number">{r.coverDays == null ? "нет данных" : num(r.coverDays, 1)}</td>
                   <td className="number">{num(r.quantity)} <span className="unit-label">{unitLabel(r.unit)}</span></td>
                   <QuantityCell rec={r} value={edits[r.key] ?? quantity(r)} edited={r.key in edits} approved={!!order?.approvedKeys.includes(r.key)} onChange={v => setEdits(current => ({ ...current, [r.key]: v }))} onReset={() => setEdits(current => { const next = { ...current }; delete next[r.key]; return next; })}/>
                   <td><div className="status-stack"><span className={`badge ${r.urgency}`}>{urgencyLabels[r.urgency]}</span><span className={`badge ${r.confidence}-confidence`} title="Уверенность прогноза">{confidenceLabels[r.confidence]}</span></div></td>
-                  <td><button className="button small explanation-button" aria-label={`Пояснение: ${r.name}`} onClick={() => setDrawerKey(r.key)}>Почему <ArrowRight size={13} aria-hidden="true"/></button></td>
                 </tr>)}
               </SupplierRows>; })}
               {visible.length === 0 && <tr><td colSpan={9} style={{ textAlign: "center", padding: 35, color: "var(--muted)" }}>Нет позиций по выбранным условиям отображения</td></tr>}
@@ -483,7 +482,7 @@ export function OrderWorkspace({ initialRoute, initialSku }: { initialRoute: Rou
     {audit && <div className="modal-backdrop"><section className="modal" role="dialog" aria-modal="true" aria-labelledby="audit-title"><header><h2 id="audit-title">История · {supplierLabel(audit.supplier)}</h2><button className="icon-button" aria-label="Закрыть историю" onClick={() => setAudit(undefined)}><X size={18}/></button></header><div className="modal-body">{audit.events.length ? audit.events.map(e => <div className="audit-row" key={e.id}><FileClock size={16}/><div><strong>{e.action || e.type || "Изменение"}</strong>{e.actor && <p>{e.actor}</p>}<pre>{JSON.stringify(e.payload || e.details || {}, null, 2)}</pre><small>{new Date(e.createdAt).toLocaleString("ru-RU")}</small></div></div>) : <p>Событий пока нет.</p>}</div></section></div>}
 
     {/* Drawer: §8 */}
-    {drawerKey && run && (() => { const rec = recommendations.find(r => r.key === drawerKey); return rec ? <div className="drawer-backdrop" onClick={() => setDrawerKey(undefined)}><aside className="drawer" role="dialog" aria-modal="true" aria-labelledby="drawer-title" onClick={e => e.stopPropagation()}><div className="drawer-header"><div><h2 id="drawer-title">{rec.name}</h2><p className="drawer-supplier"><SupplierLogo supplier={rec.supplier} size="sm"/>{rec.supplierArticle || rec.code} · {supplierLabel(rec.supplier)}</p></div><button className="icon-button" aria-label="Закрыть обоснование" onClick={() => setDrawerKey(undefined)}><X size={18}/></button></div><div className="drawer-body"><SkuDetailBody rec={rec} runId={run.id} datasetId={run.datasetId} onScenario={newRunId => { const baseRunId = run.id; setDrawerKey(undefined); addRun(run.datasetId, { id: newRunId, createdAt: new Date().toISOString(), baseRunId }); openRun(newRunId, "Открыт пересчитанный сценарий. Базовый расчёт сохранён в истории."); }}/></div></aside></div> : null; })()}
+    {drawerKey && run && (() => { const rec = recommendations.find(r => r.key === drawerKey); return rec ? <div className="drawer-backdrop" onClick={() => setDrawerKey(undefined)}><aside className="drawer" role="dialog" aria-modal="true" aria-labelledby="drawer-title" onClick={e => e.stopPropagation()}><div className="drawer-header"><div><h2 id="drawer-title">{rec.name}</h2><p className="drawer-supplier"><SupplierLogo supplier={rec.supplier} size="sm"/><span>Артикул {rec.supplierArticle || "—"} · код 1С {rec.code}</span></p></div><button className="icon-button" aria-label="Закрыть обоснование" onClick={() => setDrawerKey(undefined)}><X size={18}/></button></div><div className="drawer-body"><SkuDetailBody rec={rec} runId={run.id} datasetId={run.datasetId} onScenario={newRunId => { const baseRunId = run.id; setDrawerKey(undefined); addRun(run.datasetId, { id: newRunId, createdAt: new Date().toISOString(), baseRunId }); openRun(newRunId, "Открыт пересчитанный сценарий. Базовый расчёт сохранён в истории."); }}/></div></aside></div> : null; })()}
 
     {/* Data explorer dialog: §4 "Просмотреть данные" */}
     {explorerOpen && <div className="modal-backdrop" onClick={() => setExplorerOpen(false)}><section className="modal wide" role="dialog" aria-modal="true" aria-labelledby="explorer-title" onClick={e => e.stopPropagation()}><header><h2 id="explorer-title">Все загруженные данные</h2><button className="icon-button" aria-label="Закрыть" onClick={() => setExplorerOpen(false)}><X size={18}/></button></header><div className="modal-body"><DataExplorer/></div></section></div>}
