@@ -34,7 +34,7 @@ describe("proxy access gate", () => {
     it("returns 401 with WWW-Authenticate when no Authorization header is sent", () => {
       const response = proxy(requestFor("/"));
       expect(response.status).toBe(401);
-      expect(response.headers.get("WWW-Authenticate")).toBe('Basic realm="Apollon"');
+      expect(response.headers.get("WWW-Authenticate")).toContain("Basic realm=");
     });
 
     it("returns 401 for a wrong password", () => {

@@ -46,7 +46,8 @@ services:
       APOLLON_LOCAL_DB: "1"
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       OPENAI_MODEL: ${OPENAI_MODEL:-gpt-5.6-terra}
-      APOLLON_ACCESS_PASSWORD: ${APOLLON_ACCESS_PASSWORD:-}
+      APOLLON_ACCESS_USER: ${APOLLON_ACCESS_USER:-admin}
+      APOLLON_ACCESS_PASSWORD: ${APOLLON_ACCESS_PASSWORD:-admin}
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 5s

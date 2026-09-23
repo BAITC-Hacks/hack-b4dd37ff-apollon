@@ -1,4 +1,5 @@
 import { readdir, readFile } from "node:fs/promises";
+import "dotenv/config";
 import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { guessSupplier } from "../lib/ingest";
