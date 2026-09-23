@@ -204,6 +204,8 @@ Write README and methodology as components land: purpose, algorithms, source map
 
 ## 11. Settled operational decisions
 
+2026-09-23 checkpoint: implementation is paused at the user's request. GitHub autodeploy is cancelled because Railway cannot access the organization repository. Keep Railway as the deployment target, using a manual CLI deployment after work resumes and acceptance gates pass. Pushing commits alone does not deploy. See `docs/runbook.md` for the unfinished checkpoint; no product scope was removed.
+
 One Next.js application, one PostgreSQL service and one Railway environment. No monorepo, separate worker/queue, login/workspaces/roles, bucket or separate staging setup. Approver name is attribution, not verified identity; the public application is a shared synthetic demonstration and dataset IDs are not access-control boundaries.
 
 Imports, calculations and backtests run in awaited request handlers with durable `Job` status/progress/errors. Do not return and leave unawaited promises running. Mark interrupted/stale jobs, offer idempotent retry, and prevent failed partial imports becoming active. A status table does not automatically resume work after restart. Measure actual latency rather than assuming imports or calculations finish within a specific duration.

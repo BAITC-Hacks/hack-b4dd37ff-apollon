@@ -1,0 +1,104 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../generated/prisma"
+}
+datasource db {
+  provider = "postgresql"
+}
+model Dataset {
+  id          String   @id @default(cuid())
+  name        String
+  contentHash String   @unique
+  synthetic   Boolean  @default(false)
+  cutoffDate  String
+  parserVersion String
+  files       Json
+  issues      Json
+  createdAt   DateTime @default(now())
+  products    Product[]
+  runs        Run[]
+  suppliers   Json
+}
+model Product {
+  id          String @id @default(cuid())
+  datasetId   String
+  dataset     Dataset @relation(fields: [datasetId], references: [id], onDelete: Cascade)
+  supplier    String
+  code        String
+  name        String
+  article     String
+  unit        String
+  category    String
+  attributes  Json
+  monthlySales Json
+  stockHistory Json
+  currentStock Json
+  transactions Json
+  deliveries  Json
+  stockouts   Json
+  @@unique([datasetId, supplier, code])
+  @@index([datasetId, supplier, category])
+}
+model Run {
+  id          String @id @default(cuid())
+  datasetId   String
+  dataset     Dataset @relation(fields: [datasetId], references: [id])
+  policy      Json
+  filter      Json
+  result      Json
+  engineVersion String
+  inputHash   String
+  baseRunId   String?
+  createdAt   DateTime @default(now())
+  orders      Order[]
+  @@index([datasetId, createdAt])
+}
+model Order {
+  id          String @id @default(cuid())
+  runId       String
+  run         Run @relation(fields: [runId], references: [id])
+  supplier    String
+  revision    Int @default(0)
+  status      String @default("DRAFT")
+  quantities  Json
+  approvedKeys Json
+  approver    String?
+  approvedAt  DateTime?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  approvals   Approval[]
+  events      AuditEvent[]
+  @@unique([runId, supplier])
+}
+model Approval {
+  id          String @id @default(cuid())
+  orderId     String
+  order       Order @relation(fields: [orderId], references: [id])
+  revision    Int
+  approver    String
+  snapshot    Json
+  acknowledgedEstimates Boolean
+  createdAt   DateTime @default(now())
+  @@unique([orderId, revision])
+}
+model AuditEvent {
+  id          String @id @default(cuid())
+  orderId     String
+  order       Order @relation(fields: [orderId], references: [id])
+  action      String
+  actor       String?
+  revision    Int
+  detail      Json
+  createdAt   DateTime @default(now())
+  @@index([orderId, createdAt])
+}
+model Job {
+  id          String @id @default(cuid())
+  type        String
+  status      String @default("RUNNING")
+  resultId    String?
+  error       String?
+  createdAt   DateTime @default(now())
+  finishedAt  DateTime?
+  @@index([createdAt])
+}

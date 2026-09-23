@@ -1,6 +1,24 @@
 # Apollon operational runbook
 
-The authoritative scope is [BUILD_PLAN.md](../BUILD_PLAN.md). Working rules are in [AGENTS.md](../AGENTS.md). Codex integrates parallel subagent work, with no time-based feature cuts. Commit and push each verified stage to `main`; Railway deploys the connected GitHub branch once its GitHub App integration is authorized.
+The authoritative scope is [BUILD_PLAN.md](../BUILD_PLAN.md). Working rules are in [AGENTS.md](../AGENTS.md). Codex integrates parallel subagent work, with no time-based feature cuts. Commit and push each verified stage to `main`. GitHub autodeploy was abandoned at the user's request on 2026-09-23; pushing does not deploy the app.
+
+## Paused checkpoint — 2026-09-23
+
+The user requested a stop, cleanup and commit. All three subagents were interrupted and the local dev server was stopped. Do not resume implementation or deploy until the user asks. This is a work-in-progress checkpoint, not a release; retain unfinished scope in `BUILD_PLAN.md`.
+
+- Plan consolidation is complete: `BUILD_PLAN.md` is the only implementation plan; `AGENTS.md` was adapted from `CLAUDE.md`. Superseded `HACKATHON_PLAN.md`, `PLAN_REVIEW.md` and `.omc/plans/apollon-winning-plan.md` were removed after merging their content. Original ignored `CLAUDE.md` remains a reference.
+- Present: Next.js scaffold, Prisma schema/migration, dataset/import/run/order/export APIs, pure engine, importer, deterministic synthetic Excel generator, partial manager UI, initial Agents SDK integration, tests, Docker/Railway config and CI.
+- Demo parse and database seed succeeded: 48 fictional SKUs from 12 committed workbooks. A local API calculation returned 48 recommendations; `/api/health` reported a connected database. Real workbook parsing was independently checked locally; no partner workbooks enter Git.
+- Latest checkpoint verification: **typecheck passes; 60 of 62 tests pass; lint has one error**. The earlier production build passed before the final interrupted UI/agent additions; the complete current checkpoint has not been release-validated.
+- Failing test: `tests/agent/agent.test.ts` specialist handoff uses `transfer_to_anomalyreviewer`, which the SDK does not find. Verify the actual SDK handoff name and behavior.
+- Failing test: `tests/repo/repo.test.ts` service-boundary validation. `editOrder` must reject invalid quantities and inherited keys (`toString`, `constructor`; use own-key membership), and `approveOrder` needs direct approver-name validation. Route validation alone is insufficient. Do not deploy this checkpoint before resolving this.
+- Lint: `components/workspace.tsx:66`, synchronous state updates through `refresh()` inside an effect.
+- Remaining work includes unfinished SKU/checks/backtest/trends pages, full browser workflow, dimensionally valid backtest metrics grouped by supplier/unit/horizon, review against every acceptance gate, Docker clean-start validation and deployment. Initial AI code is not live-key verified; no OpenAI API key is configured.
+- Railway PostgreSQL was provisioned successfully (template PostgreSQL 18; local Compose uses PostgreSQL 16). The app has **no deployment and no public domain**. No GitHub source was connected: Railway returned “User does not have access to the repo.” The user cannot grant access and cancelled autodeploy; do not ask again or retry it.
+- The local Compose database was stopped, preserving its volume. Railway resources are preserved; Railway PostgreSQL may continue incurring charges because pausing coding does not remove cloud services.
+- Disposable `.next` build cache, `tsconfig.tsbuildinfo` and three `.DS_Store` files were moved to `/tmp/apollon-cleanup-YAXibi` for recoverability (the operating system may eventually clear `/tmp`). Dependencies, generated Prisma client, ignored agent history, source data and credentials were preserved locally. Ignore rules keep caches, temporary files and secrets out of Git; all 12 synthetic workbooks remain tracked.
+
+When resumed, fix the documented failing checks first, finish the retained scope, run all gates and only then deploy manually if requested. No tests were removed or disabled to make this checkpoint appear green.
 
 ## Data and secrets
 
@@ -50,13 +68,18 @@ Review staged file names and content before each commit. Check `git ls-files 'ca
 - Environment: `production`, `428afbae-1686-4dbb-a3e5-200a2a2cd0d2`.
 - App: `apollon`, `02be117b-61a2-4e26-a0cc-6b475d2d321c`.
 - PostgreSQL: `d996992f-11a9-46c3-86da-8cc7b526fa5b`.
-- GitHub source: `BAITC-Hacks/hack-b4dd37ff-apollon`, branch `main`.
+- Git repository: `BAITC-Hacks/hack-b4dd37ff-apollon`, branch `main`; **not connected as a Railway source**.
 - `DATABASE_URL` references `${{Postgres.DATABASE_URL}}` on the private network.
 - `railway.json` selects the Node 24 Dockerfile. Pre-deploy runs migrations and idempotent demo import; startup runs the Next.js standalone server. Health endpoint: `/api/health`.
 
-After every push, inspect the deployment for that exact Git commit. Do not treat queued/building as success. Require Railway `SUCCESS`, then HTTP 200 from `/api/health`, a visible demo dataset, and a successful calculation. A missing GitHub-triggered deployment is an integration problem, not a reason to claim automatic deployment works.
+Future manual deployment, only after the user resumes and release checks pass:
 
-If Railway cannot see the organization repository, a GitHub organization administrator must grant the Railway GitHub App access to this repository. A CLI directory deployment does not establish GitHub autodeploy.
+```sh
+railway up --project 5458bd50-da4b-44d4-9670-38d2e6849f7e --environment 428afbae-1686-4dbb-a3e5-200a2a2cd0d2 --service 02be117b-61a2-4e26-a0cc-6b475d2d321c --detach -m "Verified release"
+railway deployment list --service 02be117b-61a2-4e26-a0cc-6b475d2d321c --environment 428afbae-1686-4dbb-a3e5-200a2a2cd0d2 --json
+```
+
+Inspect the exact deployment returned by upload. Do not treat queued/building as success. Require Railway `SUCCESS`, then HTTP 200 from `/api/health`, a visible demo dataset, and a successful calculation. Manual directory deployment does not require Railway GitHub App access and does not enable autodeploy. `railway.json` currently remains supported but the CLI reports its retirement on 2026-12-01; revisit Railway's current IaC guidance before deploying beyond that date.
 
 ## Verification flow
 

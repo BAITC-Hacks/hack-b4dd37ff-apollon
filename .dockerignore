@@ -1,0 +1,21 @@
+.git
+.omc
+node_modules
+.next
+.env
+.env.*
+case and data
+test-results
+playwright-report
+*.log
+/IEK
+/Systeme electric
+.DS_Store
+**/.DS_Store
+CLAUDE.md
+.cache
+coverage
+artifacts
+*.tsbuildinfo
+*.pem
+*.key

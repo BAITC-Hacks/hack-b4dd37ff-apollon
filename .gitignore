@@ -17,7 +17,12 @@ coverage/
 ~$*.xlsx
 .railway/
 artifacts/
-IEK/
-Systeme electric/
+/IEK/
+/Systeme electric/
 *.pem
 *.key
+!sample-data/**/*.xlsx
+.cache/
+*.tmp
+*.swp
+*.swo
