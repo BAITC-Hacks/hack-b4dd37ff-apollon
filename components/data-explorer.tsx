@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { ChevronLeft, ChevronRight, Search } from "lucide-react";
+import { AiInsight } from "./ai-insight";
 import { api, categoryLabel, dateLabel, LoadingState, Metric, num, PageHeading, sourceLabel, supplierLabel, useWorkspace } from "./workspace";
 
 type Tab = "products" | "sales" | "stocks" | "transactions" | "deliveries" | "issues";
@@ -66,6 +67,7 @@ export function DataExplorer() {
 
   return <>
     <PageHeading eyebrow="Полный доступ к загруженным данным" title="Данные" description={`${dataset?.name || ""} · товары, продажи, остатки и поставки.`} />
+    {datasetId && <AiInsight url="/api/insights" body={{ kind: "data", datasetId }}/>}
     <div className="metrics"><Metric label="Товаров" value={num(details?.suppliers.reduce((n, s) => n + s.productCount, 0))} tone="teal" /><Metric label="Операций" value={num(details?.suppliers.reduce((n, s) => n + s.transactionCount, 0))} /><Metric label="Поставщиков" value={num(details?.suppliers.length)} /><Metric label="Замечаний аудита" value={num(details?.suppliers.reduce((n, s) => n + s.issues.length, 0))} tone="orange" /></div>
     <details className="source-diagnostics">
       <summary>Источники и полнота данных</summary>

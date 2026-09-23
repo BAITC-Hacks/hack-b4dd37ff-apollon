@@ -343,20 +343,12 @@ body:has(.sticky-bar) .copilot-launcher{bottom:92px}
 
 /* Procurement begins with one decision; source diagnostics stay in the data dialog. */
 .procurement-heading{align-items:center;margin-bottom:24px}
-.data-actions{position:relative}
-.data-actions>summary{display:flex;align-items:center;gap:8px;cursor:pointer;min-height:44px;padding:0 14px;border:1px solid var(--line-strong);border-radius:var(--radius-sm);list-style:none;background:var(--surface)}
-.data-actions>summary::-webkit-details-marker{display:none}
-.data-actions-menu{position:absolute;right:0;top:calc(100% + 8px);z-index:30;display:grid;gap:8px;min-width:260px;padding:12px;border:1px solid var(--line-strong);border-radius:var(--radius);background:var(--surface);box-shadow:var(--shadow-sm)}
-.data-actions-menu .button{justify-content:flex-start;min-height:44px}
 .button.explanation-button{min-height:44px;height:auto;padding:11px 16px;font-size:14px;font-weight:600}
 .source-diagnostics{margin-bottom:24px;border:1px solid var(--line-strong);border-radius:var(--radius);padding:16px}
 .source-diagnostics>summary{cursor:pointer;min-height:32px;font-weight:500}
 .source-diagnostics .table-scroll{margin-top:16px}
 .source-file-list{font-size:13px;line-height:1.7;color:var(--muted);padding-left:20px;overflow-wrap:anywhere}
 .source-file-list li{margin-top:6px}
-@media(max-width:640px){
-  .data-actions-menu{min-width:240px}
-}
 
 :where(button,a,input,select,textarea,summary):focus-visible{outline:2px solid #0070f3;outline-offset:3px}
 
@@ -493,9 +485,9 @@ a.app-brand{border-radius:var(--radius-sm)}
 
 /* AI summary at the top of the explanation drawer */
 .ai-summary{margin-bottom:16px;padding:14px 16px;border:1px solid #cfe4ff;border-radius:var(--radius-sm);background:linear-gradient(180deg,#f3f8ff,#eef6ff)}
-.ai-summary header{display:flex;align-items:center;gap:6px;flex-wrap:wrap;color:#0060d1;margin-bottom:6px}
-.ai-summary header strong{font-size:13px;font-weight:600}
-.ai-summary header span{font-size:12px;color:#5b7ea8}
+.ai-summary-head{display:flex;align-items:center;gap:6px;flex-wrap:wrap;color:#0060d1;margin-bottom:6px}
+.ai-summary-head strong{font-size:13px;font-weight:600}
+.ai-summary-head span{font-size:12px;color:#5b7ea8}
 .ai-summary p{margin:0;font-size:14px;line-height:1.6;color:#1a2b40}
 .ai-summary p.ai-summary-error{color:var(--muted);font-size:13px}
 .ai-summary-loading{display:flex;flex-direction:column;gap:6px;padding:2px 0}
@@ -504,3 +496,42 @@ a.app-brand{border-radius:var(--radius-sm)}
 @keyframes ai-shimmer{to{background-position:-200% 0}}
 .ai-summary-lines{display:flex;flex-direction:column;gap:8px}
 .ai-summary-lines b{font-weight:600;color:#0060d1}
+
+/* Compact explanation drawer */
+.drawer .drawer-header{padding:14px 20px}
+.drawer .drawer-header h2{font-size:16px;line-height:1.35}
+.drawer .drawer-header p{margin-top:2px}
+.drawer .drawer-body{padding:14px 20px 28px}
+.drawer .ai-summary{margin-bottom:12px;padding:10px 12px}
+.drawer .ai-summary p{font-size:13px;line-height:1.5}
+.drawer .ai-summary-lines{gap:4px}
+.drawer .drawer-kpis{grid-template-columns:repeat(4,minmax(0,1fr));gap:6px;margin-bottom:12px}
+.drawer .drawer-kpi{padding:8px 10px;gap:3px}
+.drawer .drawer-kpi>span{font-size:11px}
+.drawer .drawer-kpi strong{font-size:17px}
+.drawer .drawer-kpi strong small{font-size:12px}
+.drawer .drawer-kpi strong .badge{height:20px;font-size:11px}
+.drawer .drawer-kpi em{font-size:11px;line-height:1.3}
+.drawer .card{margin-bottom:12px;box-shadow:none}
+.drawer .card-header{padding:10px 14px}
+.drawer .card-header h2{font-size:14px}
+.drawer .card-header p{font-size:12px;margin-top:2px;line-height:1.4}
+.drawer .card-body{padding:12px 14px}
+.drawer .formula-steps li{padding:6px 10px;gap:8px;grid-template-columns:18px minmax(0,1fr) auto}
+.drawer .formula-steps li strong{font-size:13px}
+.drawer .formula-steps li small{font-size:11px}
+.drawer .formula-steps li b{font-size:14px}
+.drawer .drawer-subtitle{font-size:13px;margin:12px 0 4px}
+.drawer .explanation-steps{font-size:12px;gap:3px;line-height:1.45}
+.drawer .advanced-policy{margin-top:10px}
+.drawer .detail-list{gap:6px 16px}
+.drawer .detail-list div{padding-bottom:6px;font-size:13px}
+.drawer .season-track{height:56px}
+.drawer .chart-caption{font-size:12px;margin-top:8px;line-height:1.45}
+.drawer .chart-container{height:220px}
+.drawer .anomaly-row{padding:6px 10px;font-size:13px;margin-bottom:6px}
+.drawer .timeline-row{padding:6px 0;font-size:13px}
+@media(max-width:640px){.drawer .drawer-kpis{grid-template-columns:repeat(2,minmax(0,1fr))}}
+.page-heading .heading-actions{display:flex;gap:8px;flex-wrap:wrap}
+.modal .ai-summary{margin-bottom:16px}
+.modal-backdrop[hidden]{display:none}

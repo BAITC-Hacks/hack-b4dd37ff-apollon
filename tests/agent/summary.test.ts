@@ -29,3 +29,21 @@ describe("SKU summary agent", () => {
     await expect(summarizeSku(rec, { model, tracingDisabled: true })).rejects.toBeInstanceOf(OutputGuardrailTripwireTriggered);
   });
 });
+
+describe("dataset and checks insights", () => {
+  it("builds aggregate dataset facts without rows, customers or invoices", async () => {
+    const { datasetFacts } = await import("../../lib/agent/summary");
+    const dataset = makeEngineFixture({ spike: true, customer: true });
+    const facts = datasetFacts({ ...dataset, suppliers: dataset.suppliers.map(sup => ({ supplier: sup.supplier, productCount: sup.products.length, issues: [...sup.issues, { severity: "warning", message: "x" }, { severity: "warning", message: "x" }] })) });
+    expect(facts.suppliers[0].products).toBe(dataset.suppliers[0].products.length);
+    expect(facts.suppliers[0].topIssues[0]).toMatchObject({ message: "x", count: 2 });
+    expect(JSON.stringify(facts)).not.toMatch(/customerId|"invoice"/);
+  });
+  it("summarises checks through the SDK and returns the model text", async () => {
+    const { checksFacts, summarizeInsight } = await import("../../lib/agent/summary");
+    const facts = checksFacts([{ id: "a", name: "MOQ", passed: true, details: "ok", values: {} }, { id: "b", name: "Сезонность", passed: false, details: "нет данных", values: {} }]);
+    expect(facts).toMatchObject({ total: 2, passed: 1 });
+    const { model } = modelReturning("Итог: 1 из 2.");
+    await expect(summarizeInsight("checks", facts, { model, tracingDisabled: true })).resolves.toBe("Итог: 1 из 2.");
+  });
+});

@@ -4,7 +4,7 @@ import Image from "next/image";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  ArrowDownToLine, ArrowRight, ArrowUpDown, Check, CheckCheck, ChevronDown, ChevronLeft, ChevronRight,
+  ArrowDownToLine, ArrowRight, ArrowUpDown, Check, CheckCheck, ChevronLeft, ChevronRight,
   Database, FileClock, FileSpreadsheet, FolderUp, History, Play, Save, Search,
   ShieldCheck, Sparkles, UploadCloud, X,
 } from "lucide-react";
@@ -103,8 +103,13 @@ export function OrderWorkspace({ initialRoute, initialSku }: { initialRoute: Rou
   const [approver, setApprover] = useState(""); const [acknowledged, setAcknowledged] = useState(false);
 
   // ---- Dialogs ----
-  const [explorerOpen, setExplorerOpen] = useState(false);
-  const [reviewDialogOpen, setReviewDialogOpen] = useState(false);
+  // Dialogs stay mounted after the first opening (hidden when closed), so reopening keeps loaded data instead of refetching.
+  const [explorerOpen, setExplorerOpenState] = useState(false);
+  const [explorerMounted, setExplorerMounted] = useState(false);
+  function setExplorerOpen(open: boolean) { setExplorerOpenState(open); if (open) setExplorerMounted(true); }
+  const [reviewDialogOpen, setReviewDialogOpenState] = useState(false);
+  const [reviewMounted, setReviewMounted] = useState(false);
+  function setReviewDialogOpen(open: boolean) { setReviewDialogOpenState(open); if (open) setReviewMounted(true); }
   const [historyOpen, setHistoryOpen] = useState(false);
   const [history, setHistory] = useState<RunHistoryEntry[]>();
   const [historyError, setHistoryError] = useState("");
@@ -372,11 +377,11 @@ export function OrderWorkspace({ initialRoute, initialSku }: { initialRoute: Rou
     {!onStart && datasetId && <>
       <div className="page-heading procurement-heading">
         <div><h1>Заказ поставщику</h1><p>{dataset ? `${dataset.name} · данные на ${dateLabel(dataset.cutoffDate)}` : "Загружаем данные…"}{run && <> · <span className="route-id" title="Адрес этого расчёта">расчёт {run.id.slice(-8)}</span></>}</p></div>
-        <details className="data-actions" onKeyDown={event => { if (event.key === "Escape") { event.currentTarget.open = false; event.currentTarget.querySelector("summary")?.focus(); } }}><summary>Данные <ChevronDown size={14} aria-hidden="true"/></summary><div className="data-actions-menu">
+        <div className="heading-actions">
           <button className="button" onClick={() => setExplorerOpen(true)}><Search size={14} aria-hidden="true"/>Просмотреть данные</button>
-          <button className="button" onClick={startNewCalculation}><FolderUp size={14} aria-hidden="true"/>Изменить / загрузить отчёты</button>
           <button className="button" onClick={() => setReviewDialogOpen(true)}><ShieldCheck size={14} aria-hidden="true"/>Проверка расчёта</button>
-        </div></details>
+          <button className="button" onClick={startNewCalculation}><FolderUp size={14} aria-hidden="true"/>Изменить / загрузить отчёты</button>
+        </div>
       </div>
 
       {datasetsLoading ? <LoadingState/> : <>
@@ -485,10 +490,10 @@ export function OrderWorkspace({ initialRoute, initialSku }: { initialRoute: Rou
     {drawerKey && run && (() => { const rec = recommendations.find(r => r.key === drawerKey); return rec ? <div className="drawer-backdrop" onClick={() => setDrawerKey(undefined)}><aside className="drawer" role="dialog" aria-modal="true" aria-labelledby="drawer-title" onClick={e => e.stopPropagation()}><div className="drawer-header"><div><h2 id="drawer-title">{rec.name}</h2><p className="drawer-supplier"><SupplierLogo supplier={rec.supplier} size="sm"/><span>Артикул {rec.supplierArticle || "—"} · код 1С {rec.code}</span></p></div><button className="icon-button" aria-label="Закрыть обоснование" onClick={() => setDrawerKey(undefined)}><X size={18}/></button></div><div className="drawer-body"><SkuDetailBody rec={rec} runId={run.id} datasetId={run.datasetId} onScenario={newRunId => { const baseRunId = run.id; setDrawerKey(undefined); addRun(run.datasetId, { id: newRunId, createdAt: new Date().toISOString(), baseRunId }); openRun(newRunId, "Открыт пересчитанный сценарий. Базовый расчёт сохранён в истории."); }}/></div></aside></div> : null; })()}
 
     {/* Data explorer dialog: §4 "Просмотреть данные" */}
-    {explorerOpen && <div className="modal-backdrop" onClick={() => setExplorerOpen(false)}><section className="modal wide" role="dialog" aria-modal="true" aria-labelledby="explorer-title" onClick={e => e.stopPropagation()}><header><h2 id="explorer-title">Все загруженные данные</h2><button className="icon-button" aria-label="Закрыть" onClick={() => setExplorerOpen(false)}><X size={18}/></button></header><div className="modal-body"><DataExplorer/></div></section></div>}
+    {explorerMounted && <div className="modal-backdrop" hidden={!explorerOpen} key={datasetId} onClick={() => setExplorerOpen(false)}><section className="modal wide" role="dialog" aria-modal="true" aria-labelledby="explorer-title" onClick={e => e.stopPropagation()}><header><h2 id="explorer-title">Все загруженные данные</h2><button className="icon-button" aria-label="Закрыть" onClick={() => setExplorerOpen(false)}><X size={18}/></button></header><div className="modal-body"><DataExplorer/></div></section></div>}
 
     {/* Проверка расчёта dialog: §12 */}
-    {reviewDialogOpen && <ReviewDialog onClose={() => setReviewDialogOpen(false)}/>}
+    {reviewMounted && <ReviewDialog key={datasetId} open={reviewDialogOpen} onClose={() => setReviewDialogOpen(false)}/>}
 
     {/* History panel: §10 */}
     {historyOpen && <div className="modal-backdrop" onClick={() => setHistoryOpen(false)}><section className="modal" role="dialog" aria-modal="true" aria-labelledby="history-title" onClick={e => e.stopPropagation()}><header><h2 id="history-title">История расчётов</h2><button className="icon-button" aria-label="Закрыть историю расчётов" onClick={() => setHistoryOpen(false)}><X size={18}/></button></header><div className="modal-body">
@@ -505,15 +510,18 @@ export function OrderWorkspace({ initialRoute, initialSku }: { initialRoute: Rou
   </div>;
 }
 
-function ReviewDialog({ onClose }: { onClose: () => void }) {
-  const [tab, setTab] = useState<"checks" | "backtest" | "trends">("checks");
-  return <div className="modal-backdrop" onClick={onClose}><section className="modal wide" role="dialog" aria-modal="true" aria-labelledby="review-title" onClick={e => e.stopPropagation()}>
+function ReviewDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const [tab, setTabState] = useState<"checks" | "backtest" | "trends">("checks");
+  const [visited, setVisited] = useState<string[]>(["checks"]);
+  function setTab(next: typeof tab) { setTabState(next); setVisited(v => v.includes(next) ? v : [...v, next]); }
+  return <div className="modal-backdrop" hidden={!open} onClick={onClose}><section className="modal wide" role="dialog" aria-modal="true" aria-labelledby="review-title" onClick={e => e.stopPropagation()}>
     <header><h2 id="review-title">Проверка расчёта</h2><button className="icon-button" aria-label="Закрыть" onClick={onClose}><X size={18}/></button></header>
     <div className="modal-body">
       <div className="tab-bar" role="tablist" aria-label="Раздел проверки"><button role="tab" aria-selected={tab === "checks"} className={tab === "checks" ? "active" : ""} onClick={() => setTab("checks")}>Проверки кейса</button><button role="tab" aria-selected={tab === "backtest"} className={tab === "backtest" ? "active" : ""} onClick={() => setTab("backtest")}>Бэктест прогноза</button><button role="tab" aria-selected={tab === "trends"} className={tab === "trends" ? "active" : ""} onClick={() => setTab("trends")}>Динамика спроса</button></div>
-      {tab === "checks" && <ChecksDashboard/>}
-      {tab === "backtest" && <BacktestDashboard/>}
-      {tab === "trends" && <TrendsDashboard/>}
+      {/* Tabs stay mounted once opened, so switching back never re-runs checks, backtest or trends. */}
+      {visited.includes("checks") && <div hidden={tab !== "checks"}><ChecksDashboard/></div>}
+      {visited.includes("backtest") && <div hidden={tab !== "backtest"}><BacktestDashboard/></div>}
+      {visited.includes("trends") && <div hidden={tab !== "trends"}><TrendsDashboard/></div>}
     </div>
   </section></div>;
 }

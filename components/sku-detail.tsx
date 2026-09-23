@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { RotateCcw, Sparkles, TriangleAlert } from "lucide-react";
+import { useState } from "react";
+import { RotateCcw, TriangleAlert } from "lucide-react";
+import { AiInsight } from "./ai-insight";
 import type { Recommendation } from "@/lib/contracts/engine";
 import { DemandChart, StockChart } from "./charts";
 import { api, dateLabel, ErrorNotice, num } from "./workspace";
@@ -15,24 +16,6 @@ const MONTHS = ["Янв", "Фев", "Мар", "Апр", "Май", "Июн", "И�
 /** Splits the engine's one-paragraph explanation into sentences (a period followed by a capital letter), without touching decimals. */
 function explanationSteps(text: string) {
   return text.split(/(?<=\.)\s+(?=[А-ЯЁA-Z])/).map(s => s.trim()).filter(Boolean);
-}
-
-/** Plain-language summary from the OpenAI Agents SDK (POST /api/runs/[id]/summary). The calculation below never depends on it. */
-function AiSummary({ runId, recKey }: { runId: string; recKey: string }) {
-  const [state, setState] = useState<{ key: string; summary?: string; error?: string }>();
-  const current = state?.key === `${runId}:${recKey}` ? state : undefined;
-  useEffect(() => {
-    const key = `${runId}:${recKey}`, controller = new AbortController();
-    api<{ summary: string }>(`/api/runs/${encodeURIComponent(runId)}/summary`, { method: "POST", body: JSON.stringify({ key: recKey }), signal: controller.signal })
-      .then(r => setState({ key, summary: r.summary }))
-      .catch(e => { if (!controller.signal.aborted) setState({ key, error: e instanceof Error ? e.message : "Резюме недоступно" }); });
-    return () => controller.abort();
-  }, [runId, recKey]);
-  return <section className="ai-summary" aria-live="polite" aria-busy={!current}>
-    <header><Sparkles size={14} aria-hidden="true"/><strong>Кратко</strong><span>сгенерировано ИИ · проверьте по расчёту ниже</span></header>
-    {!current ? <div className="ai-summary-loading"><span/><span/><span/><em className="sr-only">Готовим резюме…</em></div>
-      : current.summary ? <div className="ai-summary-lines">{current.summary.split(/\n+/).map(line => line.trim()).filter(Boolean).map((line, i) => { const m = line.match(/^([^:]{2,20}):\s*(.*)$/); return <p key={i}>{m ? <><b>{m[1]}:</b> {m[2]}</> : line}</p>; })}</div> : <p className="ai-summary-error">{current.error}</p>}
-  </section>;
 }
 
 function SeasonalityBars({ factors }: { factors: number[] }) {
@@ -62,7 +45,7 @@ export function SkuDetailBody({ rec, runId, datasetId, onScenario }: { rec: Reco
   const steps = explanationSteps(rec.explanation);
   return <div className="sku-detail">
     <ErrorNotice error={error} />
-    <AiSummary runId={runId} recKey={rec.key}/>
+    <AiInsight url={`/api/runs/${encodeURIComponent(runId)}/summary`} body={{ key: rec.key }}/>
     <div className="drawer-kpis">
       <div className="drawer-kpi accent"><span>Рекомендовано</span><strong>{num(rec.quantity)} <small>{rec.unit}</small></strong><em>Кратность {num(p.multiple || 1)} · MOQ {num(p.moq)}</em></div>
       <div className="drawer-kpi"><span>Срочность</span><strong><span className={`badge ${rec.urgency}`}>{urgencyLabels[rec.urgency]}</span></strong><em>{rec.coverDays == null ? "Запас неизвестен" : `Запаса хватит на ${num(rec.coverDays, 1)} дн.`}</em></div>
