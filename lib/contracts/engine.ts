@@ -23,13 +23,17 @@ export interface Policy {
   leadTimeDays: number; reviewDays: number; serviceLevel: number; safetyDays: number;
   growthRate: number | null; growthMode: "replace" | "additive"; stockoutCompensation: boolean; outlierFiltering: boolean;
   categoryServiceLevels: Record<string, number>; categorySafetyDays: Record<string, number>;
+  /** Additive (2026-09-23): explicit per-category monthly demand prior used only when a SKU has zero
+   *  observed demand basis (new SKU or fully unavailable history), so the engine never falls back to a
+   *  silent zero. Labelled as an assumption in provenance when applied. */
+  categoryFallbackDemand: Record<string, number>;
   restoredAnomalyIds: string[]; availabilityOverrides: Record<string, number>; currentStockOverrides: Record<string, number>;
 }
 export const DEFAULT_POLICY: Policy = {
   leadTimeDays: 45, reviewDays: 30, serviceLevel: 0.95, safetyDays: 7, growthRate: null, growthMode: "replace",
   stockoutCompensation: true, outlierFiltering: true,
   categoryServiceLevels: { "1": 0.98, "2": 0.95, "3": 0.92, "5": 0.90, "7": 0.85 },
-  categorySafetyDays: {}, restoredAnomalyIds: [], availabilityOverrides: {}, currentStockOverrides: {},
+  categorySafetyDays: {}, categoryFallbackDemand: {}, restoredAnomalyIds: [], availabilityOverrides: {}, currentStockOverrides: {},
 };
 export interface AnomalyFlag { id: string; code: string; date: string; invoice?: string; quantity: number; threshold: number; reason: string; excluded: boolean }
 export interface DemandPoint { month: string; raw: number; cleaned: number; adjusted: number; lost: number; lostLow: number; lostHigh: number; availability: number; forecast?: number }
@@ -50,5 +54,15 @@ export interface Recommendation {
 export interface PlanFilter { supplier?: Supplier; category?: string }
 export interface PlanResult { recommendations: Recommendation[]; policy: Policy; cutoffDate: string; warnings: string[] }
 export interface CaseCheck { id: string; name: string; passed: boolean; details: string; values: Record<string, number | string | boolean> }
-export interface BacktestRow { supplier: Supplier; code: string; origin: string; month: string; actual: number; predicted: number; seasonalNaive: number; meanBaseline: number }
-export interface BacktestResult { rows: BacktestRow[]; metrics: { model: string; mae: number; wape: number | null; bias: number; count: number }[]; warnings: string[] }
+export interface BacktestRow {
+  supplier: Supplier; code: string; unit: string; origin: string; month: string;
+  /** Additive (2026-09-23): forecast horizon in months (1-3) from the origin, so metrics can be reported per horizon. */
+  horizon: number;
+  actual: number; predicted: number; seasonalNaive: number; meanBaseline: number;
+}
+export interface BacktestResult {
+  rows: BacktestRow[];
+  /** Additive (2026-09-23): metrics are grouped by horizon and by unit so incompatible units (шт vs м) are never summed together. */
+  metrics: { model: string; horizon: number; unit: string; mae: number; wape: number | null; bias: number; count: number }[];
+  warnings: string[];
+}

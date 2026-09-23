@@ -1,6 +1,6 @@
 import type { BacktestResult, DatasetInput } from "../contracts/engine";
 import { forecastMonthlySeries } from "./index";
-import { addMonths, endOfMonth, mean, round, sum } from "./math";
+import { addMonths, endOfMonth, mean, monthDistance, round, sum } from "./math";
 
 /** Rebuild all model inputs at each origin; future snapshots, transactions and receipts cannot leak. */
 export function backtest(dataset: DatasetInput): BacktestResult {
@@ -36,17 +36,24 @@ export function backtest(dataset: DatasetInput): BacktestResult {
         for (const month of months) {
           const actual = actuals.get(month), predicted = predictions.get(`${supplier.supplier}:${product.code}`)?.get(month);
           if (actual === undefined || predicted === undefined) continue;
-          rows.push({ supplier: supplier.supplier, code: product.code, origin, month, actual: Math.max(0, actual), predicted, seasonalNaive: Math.max(0, actuals.get(addMonths(month, -12)) ?? mean(history)), meanBaseline: mean(history) });
+          const horizon = monthDistance(originMonth, month);
+          rows.push({ supplier: supplier.supplier, code: product.code, unit: product.unit, origin, month, horizon, actual: Math.max(0, actual), predicted, seasonalNaive: Math.max(0, actuals.get(addMonths(month, -12)) ?? mean(history)), meanBaseline: mean(history) });
         }
       }
     }
   }
   warnings.push("Каждый прогноз переобучен на своём срезе. Неверсионированные коэффициенты роста из текущего отчёта исключены; полные фактические месяцы ограничены августом 2026.");
-  warnings.push("Оценивается наблюдаемый спрос: фактические продажи могут быть ограничены дефицитом. WAPE смешанных единиц приведён только как техническая метрика; сравнивайте одинаковые группы товаров.");
+  warnings.push("Оценивается наблюдаемый спрос: фактические продажи могут быть ограничены дефицитом. Метрики сгруппированы по горизонту и единице измерения; разные единицы никогда не суммируются.");
   if (!rows.length) warnings.push("Нет подходящих полных фактических месяцев для исторической проверки.");
-  const metrics = ([['Модель', 'predicted'], ['Сезонный наивный', 'seasonalNaive'], ['Среднее 12 месяцев', 'meanBaseline']] as const).map(([model, key]) => {
-    const errors = rows.map(row => row[key] - row.actual), denominator = sum(rows.map(row => Math.abs(row.actual)));
-    return { model, mae: round(mean(errors.map(Math.abs))), wape: denominator > 0 ? round(sum(errors.map(Math.abs)) / denominator, 6) : null, bias: round(mean(errors)), count: rows.length };
-  });
+  // Group by (horizon, unit) so sample counts are reported per horizon and quantities from
+  // incompatible units (шт vs м) are never summed into a single denominator or error total.
+  const groups = new Map<string, typeof rows>();
+  for (const row of rows) { const key = `${row.horizon}:${row.unit}`, list = groups.get(key) ?? []; list.push(row); groups.set(key, list); }
+  const metrics = ([['Модель', 'predicted'], ['Сезонный наивный', 'seasonalNaive'], ['Среднее 12 месяцев', 'meanBaseline']] as const).flatMap(([model, key]) =>
+    [...groups.entries()].map(([groupKey, groupRows]) => {
+      const [horizon, unit] = groupKey.split(":"), errors = groupRows.map(row => row[key] - row.actual), denominator = sum(groupRows.map(row => Math.abs(row.actual)));
+      return { model, horizon: Number(horizon), unit, mae: round(mean(errors.map(Math.abs))), wape: denominator > 0 ? round(sum(errors.map(Math.abs)) / denominator, 6) : null, bias: round(mean(errors)), count: groupRows.length };
+    })
+  ).sort((a, b) => a.horizon - b.horizon || a.unit.localeCompare(b.unit) || a.model.localeCompare(b.model));
   return { rows, metrics, warnings };
 }

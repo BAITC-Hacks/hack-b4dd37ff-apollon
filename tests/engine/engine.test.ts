@@ -3,7 +3,7 @@ import { calculatePlan } from "../../lib/engine";
 import { backtest } from "../../lib/engine/backtest";
 import { runCaseChecks } from "../../lib/engine/checks";
 import { makeEngineFixture, SEASON_PATTERN } from "../fixtures/engine";
-import { mean } from "../../lib/engine/math";
+import { mean, sum } from "../../lib/engine/math";
 
 const first = (dataset = makeEngineFixture(), overrides = {}) => calculatePlan(dataset, overrides).recommendations[0];
 describe("five required behaviors", () => {
@@ -116,13 +116,47 @@ describe("stock, cutoff, and procurement invariants", () => {
     expect(row.quantity).toBe(0); expect(row.coverDays).toBeNull(); expect(row.confidence).toBe("low"); expect(JSON.stringify(row)).not.toContain("NaN");
     expect(calculatePlan({ ...data, suppliers: [] }).recommendations).toHaveLength(0);
   });
+  it("uses an explicit per-category fallback demand for a new SKU instead of dividing by zero", () => {
+    const data = makeEngineFixture(); data.suppliers[0].sales = []; data.suppliers[0].transactions = []; data.suppliers[0].stocks = [];
+    const withoutFallback = first(data);
+    expect(withoutFallback.provenance.baseMonthlyDemand).toBe(0); expect(withoutFallback.quantity).toBe(0);
+    const withFallback = first(data, { categoryFallbackDemand: { "2": 80 } });
+    expect(withFallback.provenance.baseMonthlyDemand).toBe(80);
+    expect(withFallback.quantity).toBeGreaterThan(0);
+    expect(withFallback.confidence).toBe("low");
+    expect(withFallback.warnings.some(w => w.includes("категории"))).toBe(true);
+    expect(JSON.stringify(withFallback)).not.toContain("NaN");
+    // A different category with no configured prior stays at the safe zero fallback, never invents a number.
+    const otherCategory = structuredClone(data); otherCategory.suppliers[0].products[0].category = "9";
+    expect(first(otherCategory, { categoryFallbackDemand: { "2": 80 } }).provenance.baseMonthlyDemand).toBe(0);
+  });
+  it("downgrades confidence when a large share of observed demand was excluded as anomalous", () => {
+    const data = makeEngineFixture({ spike: true }), row = first(data);
+    const observedDemand = sum(row.history.filter(p => p.forecast === undefined).map(p => Math.max(0, p.raw)));
+    expect(row.provenance.excludedQuantity).toBeGreaterThan(0);
+    expect(row.provenance.excludedQuantity / observedDemand).toBeGreaterThan(.3);
+    expect(row.confidence).toBe("low");
+  });
 });
 
 describe("rolling-origin backtests", () => {
   it("refits cutoffs and excludes incomplete or unavailable actuals", () => {
     const data = makeEngineFixture(), result = backtest(data);
     expect(result.rows).toHaveLength(6); expect(result.rows.every(row => row.month <= "2026-08" && row.month > row.origin.slice(0, 7))).toBe(true);
-    expect(result.metrics.every(row => row.count === 6 && Number.isFinite(row.mae))).toBe(true);
+    // Horizon 1 has 3 fully-observed origins (May->Jun, Jun->Jul, Jul->Aug), horizon 2 has 2 (May->Jul, Jun->Aug), horizon 3 has 1 (May->Aug).
+    expect(result.rows.filter(row => row.horizon === 1)).toHaveLength(3);
+    expect(result.rows.filter(row => row.horizon === 2)).toHaveLength(2);
+    expect(result.rows.filter(row => row.horizon === 3)).toHaveLength(1);
+    expect(result.rows.every(row => row.unit === "шт")).toBe(true);
+    // Metrics are reported per horizon and never mix units; sample counts must match the row counts above.
+    for (const model of ["Модель", "Сезонный наивный", "Среднее 12 месяцев"]) {
+      const forModel = result.metrics.filter(row => row.model === model);
+      expect(forModel.every(row => row.unit === "шт" && Number.isFinite(row.mae))).toBe(true);
+      expect(forModel.find(row => row.horizon === 1)?.count).toBe(3);
+      expect(forModel.find(row => row.horizon === 2)?.count).toBe(2);
+      expect(forModel.find(row => row.horizon === 3)?.count).toBe(1);
+    }
+    expect(result.metrics.reduce((total, row) => total + (row.model === "Модель" ? row.count : 0), 0)).toBe(6);
   });
   it("future sales, customer evidence and supplied growth cannot change an earlier-origin prediction", () => {
     const data = makeEngineFixture(), before = backtest(data).rows.filter(row => row.origin === "2026-05-31");

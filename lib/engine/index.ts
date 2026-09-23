@@ -3,7 +3,7 @@ import { addDays, addMonths, clamp, dateOf, daysInMonth, diffDays, endOfMonth, f
 
 interface Invoice { id: string; date: string; quantity: number; customerId?: string }
 interface SeriesPoint { month: string; quantity: number }
-interface Fit { level: number; factors: number[]; growth: number; growthSource: string; reference: string; errors: number[] }
+interface Fit { level: number; factors: number[]; growth: number; growthSource: string; reference: string; errors: number[]; usedCategoryFallback: boolean }
 export const ENGINE_THRESHOLDS = { reconciliationTolerance: .05, minimumPriorInvoices: 6, invoiceMonthlyShare: .3, monthlyRatio: 3, madMultiplier: 6, iqrMultiplier: 3, persistenceMonths: 6, persistenceMinimum: 3, intermittentZeroShare: .4, annualTrendCap: .5, availabilitySensitivity: .25 } as const;
 
 function grouped<T extends { code: string }>(rows: T[]): Map<string, T[]> {
@@ -153,19 +153,25 @@ function fitSeries(history: DemandPoint[], pooled: number[], product: Product, p
   const factors = normalized(own.map((n, i) => weight * n + (1 - weight) * pooled[i]));
   const recent = points.slice(-12), values = recent.map(p => p.quantity / factors[monthIndex(p.month)]);
   const slope = theilSen(values), average = mean(values);
+  // A new SKU or one with an all-period stockout has no demand basis at all (average === 0 across
+  // every observed month); dividing/forecasting from zero would silently manufacture a zero
+  // recommendation. Fall back to an explicit, editable per-category prior instead (BUILD_PLAN §1.4/§4.4).
+  const hasDemandBasis = values.some(n => n > 0);
+  const fallbackDemand = policy.categoryFallbackDemand[product.category];
+  const usedCategoryFallback = !hasDemandBasis && fallbackDemand !== undefined && Number.isFinite(fallbackDemand) && fallbackDemand > 0;
   const inferred = average > 0 ? clamp(slope * 12 / average, -.5, .5) : 0;
   const supplied = policy.growthRate ?? product.growthRate;
-  const growth = supplied !== undefined && supplied !== null ? clamp(supplied + (policy.growthMode === "additive" ? inferred : 0), -.95, 5) : inferred;
-  const growthSource = policy.growthRate !== null ? "параметр сценария" : product.growthRate !== undefined ? "коэффициент из отчёта" : "робастный тренд Theil–Sen";
+  const growth = usedCategoryFallback ? 0 : supplied !== undefined && supplied !== null ? clamp(supplied + (policy.growthMode === "additive" ? inferred : 0), -.95, 5) : inferred;
+  const growthSource = usedCategoryFallback ? "нет истории: рост не применяется" : policy.growthRate !== null ? "параметр сценария" : product.growthRate !== undefined ? "коэффициент из отчёта" : "робастный тренд Theil–Sen";
   // Anchor level at the last observed complete month; growth is applied from this reference only.
-  const level = Math.max(0, average + (values.length > 1 ? clamp(slope, -average / 24, average / 24) * (values.length - 1) / 2 : 0));
+  const level = usedCategoryFallback ? Math.max(0, fallbackDemand!) : Math.max(0, average + (values.length > 1 ? clamp(slope, -average / 24, average / 24) * (values.length - 1) / 2 : 0));
   const errors: number[] = [];
   for (let i = 6; i < points.length; i++) {
     const training = points.slice(0, i), localFactors = profile(training), localRecent = training.slice(-12);
     const predicted = mean(localRecent.map(p => p.quantity / localFactors[monthIndex(p.month)])) * localFactors[monthIndex(points[i].month)];
     errors.push(points[i].quantity - predicted);
   }
-  return { level, factors, growth, growthSource, reference: points.at(-1)?.month ?? "2026-08", errors };
+  return { level, factors, growth, growthSource, reference: points.at(-1)?.month ?? "2026-08", errors, usedCategoryFallback };
 }
 
 function forecast(fit: Fit, month: string): number {
@@ -193,7 +199,7 @@ function stockAtCutoff(input: SupplierInput, product: Product, cutoff: string, s
 }
 
 export function calculatePlan(dataset: DatasetInput, overrides: Partial<Policy> = {}, filter: PlanFilter = {}): PlanResult {
-  const policy: Policy = { ...DEFAULT_POLICY, ...overrides, categoryServiceLevels: { ...DEFAULT_POLICY.categoryServiceLevels, ...overrides.categoryServiceLevels }, categorySafetyDays: { ...DEFAULT_POLICY.categorySafetyDays, ...overrides.categorySafetyDays }, restoredAnomalyIds: overrides.restoredAnomalyIds ?? [], availabilityOverrides: overrides.availabilityOverrides ?? {}, currentStockOverrides: overrides.currentStockOverrides ?? {} };
+  const policy: Policy = { ...DEFAULT_POLICY, ...overrides, categoryServiceLevels: { ...DEFAULT_POLICY.categoryServiceLevels, ...overrides.categoryServiceLevels }, categorySafetyDays: { ...DEFAULT_POLICY.categorySafetyDays, ...overrides.categorySafetyDays }, categoryFallbackDemand: { ...DEFAULT_POLICY.categoryFallbackDemand, ...overrides.categoryFallbackDemand }, restoredAnomalyIds: overrides.restoredAnomalyIds ?? [], availabilityOverrides: overrides.availabilityOverrides ?? {}, currentStockOverrides: overrides.currentStockOverrides ?? {} };
   policy.leadTimeDays = Math.round(clamp(policy.leadTimeDays, 0, 730)); policy.reviewDays = Math.round(clamp(policy.reviewDays, 0, 365)); policy.safetyDays = clamp(policy.safetyDays, 0, 365); policy.serviceLevel = clamp(policy.serviceLevel, .5, .9999);
   const cutoff = dataset.cutoffDate.slice(0, 10);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(cutoff) || !Number.isFinite(dateOf(cutoff).getTime())) throw new Error("Некорректная дата расчёта");
@@ -225,6 +231,7 @@ export function calculatePlan(dataset: DatasetInput, overrides: Partial<Policy> 
       const { cleaned, anomalies } = cleanByCode.get(product.code)!;
       const history = availabilityHistory(input, product, cleaned, raw, productStocks, invoices, factors, policy, warnings);
       const fit = fitSeries(history, factors, product, policy);
+      if (fit.usedCategoryFallback) warnings.push(`Нет истории спроса (новый товар или полный дефицит за всё наблюдение): использован допущенный спрос по категории ${product.category} — ${round(fit.level, 1)} ${product.unit}/мес.`);
       const horizonDays = policy.leadTimeDays + policy.reviewDays, end = addDays(cutoff, horizonDays);
       const stock = stockAtCutoff(input, product, cutoff, snapshots.get(product.code) ?? [], productStocks, productTransactions, productDeliveries, policy, warnings);
       const inbound = productDeliveries.filter(p => (!p.receivedDate || p.receivedDate > cutoff) && p.eta > cutoff && p.eta <= end && finite(p.quantity) > 0);
@@ -258,8 +265,16 @@ export function calculatePlan(dataset: DatasetInput, overrides: Partial<Policy> 
       const shortageBeforeInbound = firstShortageDate !== null && (!nextArrival || firstShortageDate < nextArrival);
       const urgency = firstShortageDate && firstShortageDate < addDays(cutoff, policy.leadTimeDays) ? "CRITICAL" : firstShortageDate ? "HIGH" : "NORMAL";
       const excludedQuantity = sum(anomalies.filter(p => p.excluded).map(p => p.quantity)), lostDemand = sum(history.map(p => p.lost));
-      const confidence = warnings.some(p => /неизвест|расходятся|Неизвест|Менее/.test(p)) || stock.kind === "estimated" || raw.length < 12 ? "low" : warnings.length || raw.length < 24 ? "medium" : "high";
-      const assumptions = ["Обучение использует только полные месяцы до даты расчёта; незавершённый месяц исключён.", "Сезонные индексы нормированы до среднего 1; объединение только внутри единиц измерения.", "Категории не имеют придуманного смысла; уровни сервиса и дни запаса — редактируемые допущения.", fit.errors.length >= 12 ? `Страховой запас: эмпирический квантиль ${fit.errors.length} последовательных ошибок × √(H/30), минимум ${safetyDays} дней.` : `Страховой запас: z × σ ошибки за месяц × √(H/30), минимум ${safetyDays} дней; ошибки предполагаются независимыми.`, `Пороговые значения: ${JSON.stringify(ENGINE_THRESHOLDS)}`, `Рост отсчитывается от ${fit.reference}, режим ${policy.growthMode}; денежные сезонные коэффициенты поставщика не участвуют в прогнозе.`, ...(conversion !== 1 ? [`MOQ и кратность переведены в единицы спроса с коэффициентом ${conversion}.`] : [])];
+      // Anomaly share: how much of the observed demand was excluded as a one-off. A heavily corrected
+      // history is less trustworthy even when every other signal looks clean.
+      const observedDemand = sum(raw.map(p => Math.max(0, finite(p.quantity))));
+      const anomalyShare = observedDemand > 0 ? clamp(excludedQuantity / observedDemand, 0, 1) : 0;
+      const confidence = fit.usedCategoryFallback || warnings.some(p => /неизвест|расходятся|Неизвест|Менее/.test(p)) || stock.kind === "estimated" || raw.length < 12 || anomalyShare > .3
+        ? "low"
+        : warnings.length || raw.length < 24 || anomalyShare > .1
+          ? "medium"
+          : "high";
+      const assumptions = ["Обучение использует только полные месяцы до даты расчёта; незавершённый месяц исключён.", "Сезонные индексы нормированы до среднего 1; объединение только внутри единиц измерения.", "Категории не имеют придуманного смысла; уровни сервиса и дни запаса — редактируемые допущения.", fit.errors.length >= 12 ? `Страховой запас: эмпирический квантиль ${fit.errors.length} последовательных ошибок × √(H/30), минимум ${safetyDays} дней.` : `Страховой запас: z × σ ошибки за месяц × √(H/30), минимум ${safetyDays} дней; ошибки предполагаются независимыми.`, `Пороговые значения: ${JSON.stringify(ENGINE_THRESHOLDS)}`, `Рост отсчитывается от ${fit.reference}, режим ${policy.growthMode}; денежные сезонные коэффициенты поставщика не участвуют в прогнозе.`, ...(conversion !== 1 ? [`MOQ и кратность переведены в единицы спроса с коэффициентом ${conversion}.`] : []), ...(fit.usedCategoryFallback ? [`Нет наблюдаемого спроса: базовый спрос заменён допущением по категории ${product.category}, а не делением на ноль.`] : [])];
       const provenance: Recommendation["provenance"] = { baseMonthlyDemand: round(fit.level), seasonalFactors: fit.factors.map(n => round(n, 6)), annualGrowth: round(fit.growth, 6), growthSource: fit.growthSource, horizonDays, forecastDemand: round(forecastDemand), safetyStock: round(safetyStock), availableStock: round(stock.available), stockDate: stock.date, stockKind: stock.kind, eligibleInbound: round(eligibleInbound), excludedQuantity: round(excludedQuantity), lostDemand: round(lostDemand), lostDemandLow: round(sum(history.map(p => p.lostLow))), lostDemandHigh: round(sum(history.map(p => p.lostHigh))), rawNeed: round(rawNeed), moq, multiple, serviceLevel, assumptions };
       const explanation = `Базовый спрос ${round(fit.level, 1)} ${product.unit}/мес. Исключено разовых продаж: ${round(excludedQuantity, 1)}; восстановленный упущенный спрос: ${round(lostDemand, 1)} (диапазон ${provenance.lostDemandLow}–${provenance.lostDemandHigh}; оценка при отсутствии подтверждённых интервалов). Сезонность следующего месяца ×${round(fit.factors[monthIndex(addMonths(cutoff.slice(0, 7), 1))], 2)}; годовой рост ${round(fit.growth * 100, 1)}% (${fit.growthSource}). На ${horizonDays} дней: спрос ${provenance.forecastDemand} + страховой запас ${provenance.safetyStock} − доступный остаток ${provenance.availableStock} − подтверждённые по графику будущие поставки ${provenance.eligibleInbound} = чистая потребность ${provenance.rawNeed}. MOQ ${moq}, кратность ${multiple} → заказ ${quantity} ${product.unit}. Срочность: ${urgency === "CRITICAL" ? "КРИТИЧЕСКАЯ" : urgency === "HIGH" ? "ВЫСОКАЯ" : "ОБЫЧНАЯ"}; ${firstShortageDate ? `первый дефицит ${firstShortageDate}` : "дефицита в горизонте нет"}. Остаток: ${stock.kind}, дата ${stock.date}.`;
       const historyWithForecast = history.map(p => ({ ...p }));
