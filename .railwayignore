@@ -6,8 +6,6 @@ node_modules
 .env.*
 !.env.example
 case and data
-IEK
-Systeme electric
 /IEK
 /Systeme electric
 test-results
