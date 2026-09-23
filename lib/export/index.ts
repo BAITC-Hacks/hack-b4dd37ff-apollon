@@ -1,6 +1,13 @@
 import ExcelJS from "exceljs";
 import type { ExportLine, OrderView } from "@/lib/contracts/api";
-export function safeText(value:unknown):string{const text=String(value??"");return /^[\s\uFEFF]*[=+@-]/u.test(text)?`'${text}`:text;}
+export function safeText(value:unknown):string{
+ const text=String(value??"");
+ // Strip C0 (U+0000-001F), C1 (U+0080-009F), BOM and ordinary whitespace before testing for a
+ // leading formula-trigger character, so an attacker can't hide "=cmd" behind a control char. The
+ // ORIGINAL text is still prefixed (not the stripped copy) so nothing legitimate is dropped.
+ const stripped=text.replace(/^[\u0000-\u001F\u007F-\u009F\s\uFEFF]+/u,"");
+ return /^[=+@-]/u.test(stripped)?`'${text}`:text;
+}
 export const exportColumns={code:"Код 1с",article:"Артикул поставщика",name:"Наименование",quantity:"Количество",unit:"Ед.",supplier:"Поставщик"} as const;
 export type ExportColumn=keyof typeof exportColumns;
 const csvCell=(v:unknown)=>`"${safeText(v).replaceAll('"','""')}"`;
