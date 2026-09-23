@@ -38,7 +38,7 @@ Use Node 24 and authenticated Railway CLI/SSH access. No local database or autom
 ```sh
 npm ci
 npm run db:generate
-npx tsx scripts/with-production-db.ts npm run dev
+npm run dev
 ```
 
 One-file source import and full read-back verification:

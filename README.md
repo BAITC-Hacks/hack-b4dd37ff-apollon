@@ -13,7 +13,7 @@ Use Node 24 LTS. PostgreSQL runs only in the existing Railway production service
 ```sh
 npm ci
 npm run db:generate
-npx tsx scripts/with-production-db.ts npm run dev
+npm run dev
 ```
 
 Open http://localhost:3000. The wrapper uses an authenticated temporary SSH relay to Railway PostgreSQL; it does not start a local database. Database-free checks are `npm test`, `npm run typecheck` and `npm run build`. `OPENAI_API_KEY` and `OPENAI_MODEL` configure the optional assistant only.
