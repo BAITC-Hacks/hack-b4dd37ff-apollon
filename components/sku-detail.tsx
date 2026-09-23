@@ -28,7 +28,7 @@ export function SkuDetailBody({ rec, runId, datasetId, onScenario }: { rec: Reco
     <div className="metrics" style={{ gridTemplateColumns: "repeat(4,minmax(0,1fr))" }}>
       <div className="metric"><span>Рекомендация AI</span><strong>{num(rec.quantity)} {rec.unit}</strong><small>Кратность {p.multiple || 1} · MOQ {num(p.moq)}</small></div>
       <div className="metric"><span>Срочность</span><strong><span className={`badge ${rec.urgency}`}>{urgencyLabels[rec.urgency]}</span></strong><small>{rec.coverDays == null ? "Запас неизвестен" : `Запаса на ${num(rec.coverDays, 1)} дн.`}</small></div>
-      <div className="metric"><span>Уверенность</span><strong><span className={`badge ${rec.confidence}-confidence`}>{confidenceLabels[rec.confidence]}</span></strong><small>{rec.needsReview ? "Требует проверки" : "Данных достаточно"}</small></div>
+      <div className="metric"><span>Уверенность</span><strong><span className={`badge ${rec.confidence}-confidence`}>{confidenceLabels[rec.confidence]}</span></strong>{rec.needsReview && <small>Требует проверки</small>}</div>
       <div className="metric"><span>Остаток / В пути</span><strong>{num(p.availableStock, 1)} / {num(p.eligibleInbound, 1)}</strong><small>{p.stockKind !== "current" ? `Оценка на ${dateLabel(p.stockDate)}` : `На ${dateLabel(p.stockDate)}`}</small></div>
     </div>
     <section className="card"><header className="card-header"><div><h2>Как рассчитано количество</h2><p>Разложение формулы строго из данных этого расчёта.</p></div></header><div className="card-body">

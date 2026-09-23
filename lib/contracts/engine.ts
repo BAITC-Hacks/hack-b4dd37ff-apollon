@@ -51,6 +51,10 @@ export interface Recommendation {
   coverDays: number | null; firstShortageDate: string | null; shortageBeforeInbound: boolean;
   explanation: string; warnings: string[]; provenance: Provenance; history: DemandPoint[]; projection: ProjectionPoint[]; anomalies: AnomalyFlag[];
 }
+/** General methodology assumptions do not trigger review; a SKU warning or excluded sale does. */
+export function recommendationNeedsReview(row: Pick<Recommendation, "confidence" | "warnings" | "anomalies">): boolean {
+  return row.confidence === "low" && (row.warnings.length > 0 || row.anomalies.some(anomaly => anomaly.excluded));
+}
 export interface PlanFilter { supplier?: Supplier; category?: string }
 export interface PlanResult { recommendations: Recommendation[]; policy: Policy; cutoffDate: string; warnings: string[] }
 export interface CaseCheck { id: string; name: string; passed: boolean; details: string; values: Record<string, number | string | boolean> }

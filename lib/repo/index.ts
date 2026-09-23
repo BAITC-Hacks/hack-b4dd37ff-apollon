@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { getDb } from "@/lib/db";
 import { SOURCE_MAPPING_VERSION } from "@/lib/ingest/source-mapping";
 import type { Prisma, Dataset, Order, Run } from "@/generated/prisma/client";
-import type { DatasetInput, SupplierInput, Product, PlanResult, PlanFilter, Recommendation, Policy } from "@/lib/contracts/engine";
+import { recommendationNeedsReview, type DatasetInput, type SupplierInput, type Product, type PlanResult, type PlanFilter, type Recommendation, type Policy } from "@/lib/contracts/engine";
 import type { DatasetSummary, OrderView, RunView, ExportLine } from "@/lib/contracts/api";
 
 export class AppError extends Error { constructor(message: string, public status = 400) { super(message); } }
@@ -65,7 +65,10 @@ export async function loadDataset(id:string, options: { includeLegacy?: boolean 
   return {name:d.name,synthetic:d.synthetic,cutoffDate:d.cutoffDate,files:d.files as unknown as DatasetInput["files"],suppliers};
 }
 function orderView(o:Order):OrderView{return{id:o.id,supplier:o.supplier,revision:o.revision,status:o.status as OrderView["status"],approver:o.approver,approvedAt:o.approvedAt?.toISOString()??null,quantities:o.quantities as Record<string,number>,approvedKeys:o.approvedKeys as string[]};}
-function runView(r:Run & {orders:Order[]}):RunView{return{id:r.id,datasetId:r.datasetId,createdAt:r.createdAt.toISOString(),result:r.result as unknown as PlanResult,orders:r.orders.map(orderView)};}
+function runView(r:Run & {orders:Order[]}):RunView{
+ const result=r.result as unknown as PlanResult;
+ return{id:r.id,datasetId:r.datasetId,createdAt:r.createdAt.toISOString(),result:{...result,recommendations:result.recommendations.map(row=>({...row,needsReview:recommendationNeedsReview(row)}))},orders:r.orders.map(orderView)};
+}
 export async function saveRun(datasetId:string,result:PlanResult,filter:PlanFilter={},baseRunId?:string):Promise<RunView>{
   const suppliers=[...new Set(result.recommendations.map(r=>r.supplier))];
   const r=await getDb().run.create({data:{datasetId,policy:json(result.policy),filter:json(filter),result:json(result),engineVersion:"1.0.0",inputHash:createHash("sha256").update(JSON.stringify({datasetId,filter,policy:result.policy})).digest("hex"),baseRunId,orders:{create:suppliers.map(s=>({supplier:s,quantities:json(Object.fromEntries(result.recommendations.filter(r=>r.supplier===s).map(r=>[r.key,r.quantity]))),approvedKeys:[]}))}},include:{orders:true}});
@@ -121,7 +124,7 @@ export async function approveOrder(id:string,expectedRevision:number,approver:st
     const multiple=r.provenance.multiple||1;
     if(q<r.provenance.moq||Math.abs(q/multiple-Math.round(q/multiple))>1e-7)throw new AppError(`${r.code}: quantity must satisfy MOQ ${r.provenance.moq} and multiple ${multiple}`);
   }
-  if(lines.some(l=>l.recommendation.needsReview||l.recommendation.confidence==="low")&&!acknowledgedEstimates)throw new AppError("Acknowledge estimated inputs and review warnings before approval");
+  if(lines.some(l=>recommendationNeedsReview(l.recommendation))&&!acknowledgedEstimates)throw new AppError("Acknowledge estimated inputs and review warnings before approval");
   const revision=expectedRevision+1;
   const changed=await tx.order.updateMany({where:{id,revision:expectedRevision},data:{status:"APPROVED",revision,approver:approverName,approvedAt:new Date(),approvedKeys:json(selected)}});
   if(!changed.count)throw new AppError("This order changed. Reload it before approval.",409);

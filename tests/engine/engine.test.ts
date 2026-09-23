@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { calculatePlan } from "../../lib/engine";
+import { recommendationNeedsReview } from "../../lib/contracts/engine";
 import { backtest } from "../../lib/engine/backtest";
 import { runCaseChecks } from "../../lib/engine/checks";
 import { makeEngineFixture, SEASON_PATTERN } from "../fixtures/engine";
@@ -79,6 +80,24 @@ describe("active dataset evidence", () => {
     expect(row.warnings).toContain("MOQ не задан; применяется минимальное техническое значение 1.");
     expect(dataset.suppliers[0].issues).toHaveLength(1);
     expect(calculatePlan(dataset, {}, { category: "absent" }).warnings).toEqual([]);
+  });
+  it("marks only low-confidence SKUs with a concrete warning or excluded sale for review", () => {
+    expect(recommendationNeedsReview({ confidence: "high", warnings: ["MOQ неизвестен"], anomalies: [] })).toBe(false);
+    expect(recommendationNeedsReview({ confidence: "medium", warnings: ["MOQ неизвестен"], anomalies: [] })).toBe(false);
+    expect(recommendationNeedsReview({ confidence: "low", warnings: [], anomalies: [] })).toBe(false);
+    expect(recommendationNeedsReview({ confidence: "low", warnings: ["Остаток оценён"], anomalies: [] })).toBe(true);
+
+    const missingMoq = makeEngineFixture();
+    delete missingMoq.suppliers[0].products[0].moq;
+    const medium = first(missingMoq);
+    expect(medium.confidence).toBe("medium");
+    expect(medium.warnings.length).toBeGreaterThan(0);
+    expect(medium.needsReview).toBe(false);
+
+    const corrected = first(makeEngineFixture({ spike: true }));
+    expect(corrected.confidence).toBe("low");
+    expect(corrected.anomalies.some(anomaly => anomaly.excluded)).toBe(true);
+    expect(corrected.needsReview).toBe(true);
   });
 });
 

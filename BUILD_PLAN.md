@@ -117,9 +117,9 @@ All thresholds live in `Policy` and are recorded in the provenance of every reco
    - Walk the days to H: stock − daily demand + deliveries on their ETA.
    - Record `firstShortageDate`, `coverDays` and `shortageBeforeInbound`.
    - net = max(0, forecast_H + SS − available − inbound with ETA ≤ H).
-10. **Rounding.** If net > 0: q = max(net, MOQ), rounded up to the pack multiple. Apply the unit conversion (reel → metre) where known; otherwise set `needsReview`.
+10. **Rounding.** If net > 0: q = max(net, MOQ), rounded up to the pack multiple. Apply the unit conversion (reel → metre) where known; otherwise record the missing conversion as a SKU warning and lower confidence.
 11. **Urgency.** CRITICAL if a shortage happens before the next possible arrival (today + LT). HIGH if cover < LT + review. NORMAL otherwise. Also compute a risk score for sorting.
-12. **Confidence.** High, medium or low, based on history length, the stock snapshot kind, anomaly share and unresolved units.
+12. **Confidence.** High, medium or low, based on history length, the stock snapshot kind, anomaly share and unresolved units. Show `needsReview` only when confidence is low and there is a concrete SKU warning or an automatically excluded sale; general methodology assumptions do not trigger the badge.
 13. **Explanation** (Russian, deterministic, no API key needed): a fixed template filled from the provenance. Example: *«Базовый спрос 120 шт/мес (исключён разовый заказ №20000084410, 4300 шт, 28.07.26; +35 шт/мес упущенный спрос: дефицит мар–апр, оценка). Сезонность окт ×1.24, рост +8% (из отчёта). Потребность на 75 дн = 310 + страх. запас 60 − остаток 150 − в пути 100 (ETA 10.10) = 120 → кратность 50 → 150. Срочность: ВЫСОКАЯ, запаса на 21 дн при сроке поставки 40 дн.»*
 
 ## 5. Agent: `lib/agent/**`, served by `app/api/agent/route.ts`

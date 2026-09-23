@@ -1,4 +1,4 @@
-import { DEFAULT_POLICY, type AnomalyFlag, type DatasetInput, type DemandPoint, type MonthlySale, type PlanFilter, type PlanResult, type Policy, type Product, type Recommendation, type SalesTransaction, type SupplierInput } from "../contracts/engine";
+import { DEFAULT_POLICY, recommendationNeedsReview, type AnomalyFlag, type DatasetInput, type DemandPoint, type MonthlySale, type PlanFilter, type PlanResult, type Policy, type Product, type Recommendation, type SalesTransaction, type SupplierInput } from "../contracts/engine";
 import { addDays, addMonths, clamp, dateOf, daysInMonth, diffDays, endOfMonth, finite, mad, mean, median, monthDistance, monthIndex, normalQuantile, normalized, quantile, round, std, sum, theilSen } from "./math";
 
 interface Invoice { id: string; date: string; quantity: number; customerId?: string }
@@ -283,7 +283,7 @@ export function calculatePlan(dataset: DatasetInput, overrides: Partial<Policy> 
         historyWithForecast.push({ month, raw: monthToDate, cleaned: monthToDate, adjusted: monthToDate, lost: 0, lostLow: 0, lostHigh: 0, availability: 1, forecast: round(forecast(fit, month)) });
       }
       const cv = mean(history.map(p => p.adjusted)) > 0 ? std(history.map(p => p.adjusted)) / mean(history.map(p => p.adjusted)) : Infinity;
-      supplierRows.push({ key: `${input.supplier}:${product.code}`, supplier: input.supplier, code: product.code, supplierArticle: product.supplierArticle, name: product.name, unit: product.unit, category: product.category, abc: "C", xyz: cv <= .5 ? "X" : cv <= 1 ? "Y" : "Z", cost: product.cost, quantity, urgency, confidence, needsReview: warnings.length > 0 || confidence === "low", coverDays: coverDays === null ? null : round(coverDays, 1), firstShortageDate, shortageBeforeInbound, explanation, warnings: [...new Set(warnings)], provenance, history: historyWithForecast, projection, anomalies });
+      supplierRows.push({ key: `${input.supplier}:${product.code}`, supplier: input.supplier, code: product.code, supplierArticle: product.supplierArticle, name: product.name, unit: product.unit, category: product.category, abc: "C", xyz: cv <= .5 ? "X" : cv <= 1 ? "Y" : "Z", cost: product.cost, quantity, urgency, confidence, needsReview: recommendationNeedsReview({ confidence, warnings, anomalies }), coverDays: coverDays === null ? null : round(coverDays, 1), firstShortageDate, shortageBeforeInbound, explanation, warnings: [...new Set(warnings)], provenance, history: historyWithForecast, projection, anomalies });
     }
     const abcGroups = new Map<string, Recommendation[]>();
     for (const row of supplierRows) { const key = input.supplier === "SE" && row.cost !== undefined && row.cost > 0 ? "value" : `unit:${row.unit}`; const rows = abcGroups.get(key) ?? []; rows.push(row); abcGroups.set(key, rows); }
