@@ -45,7 +45,13 @@ describe("copilot security boundaries and real SDK orchestration", () => {
   });
   it("executes an actual Agents SDK specialist handoff", async () => {
     const { services } = setup();
-    const { model, getResponse } = scriptedModel([{ usage: new Usage(), output: [{ type: "function_call", callId: "handoff-1", name: "transfer_to_anomalyreviewer", arguments: "{}", status: "completed" }] }, response("Проверьте сверку месячного итога перед исключением выброса.")]);
+    // The SDK derives the handoff tool name as `transfer_to_${toFunctionToolName(agent.name)}`
+    // (node_modules/@openai/agents-core/dist/handoff.mjs, defaultHandoffToolName), and
+    // toFunctionToolName only substitutes non-alphanumeric characters — it does not lowercase
+    // (node_modules/@openai/agents-core/dist/utils/tools.mjs, toFunctionToolName). The
+    // AnomalyReviewer agent name therefore produces `transfer_to_AnomalyReviewer`, not the
+    // all-lowercase `transfer_to_anomalyreviewer`.
+    const { model, getResponse } = scriptedModel([{ usage: new Usage(), output: [{ type: "function_call", callId: "handoff-1", name: "transfer_to_AnomalyReviewer", arguments: "{}", status: "completed" }] }, response("Проверьте сверку месячного итога перед исключением выброса.")]);
     const { agent, runner } = createProcurementWorkflow({ datasetId: "dataset-active" }, services, { model, tracingDisabled: true });
     const result = await runner.run(agent, "Разбери спорную аномалию");
     expect(result.lastAgent?.name).toBe("AnomalyReviewer"); expect(result.finalOutput).toContain("сверку"); expect(getResponse).toHaveBeenCalledTimes(2);

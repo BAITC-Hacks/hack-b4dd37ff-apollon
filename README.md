@@ -2,7 +2,7 @@
 
 Explainable supplier replenishment for ТОО «Электрокомплект»: import IEK and Systeme Electric workbooks, review demand corrections and stock risk, calculate a purchase plan, approve a frozen revision, and download supplier drafts. The calculation is deterministic; an optional OpenAI assistant explains and invokes the same application services.
 
-**Status: work paused at the user's request (2026-09-23).** This is an unfinished implementation checkpoint, not a release. TypeScript passes; 60/62 tests pass and one lint error remains. Some screens and end-to-end verification are unfinished. See the [runbook checkpoint](docs/runbook.md#paused-checkpoint--2026-09-23) for exact failures and next steps. Railway GitHub autodeploy was cancelled; the app has not been deployed.
+**Status: unfinished implementation checkpoint, not a release.** `npm run typecheck`, `npm run lint`, `npm test` (62/62) and `npm run build` all pass as of this checkpoint. The two failures recorded in the [runbook checkpoint](docs/runbook.md#paused-checkpoint--2026-09-23) (the Agents SDK handoff tool name and the `editOrder`/`approveOrder` service-boundary validation) are fixed in `lib/agent/index.ts` and `lib/repo/index.ts`. What is **not** yet built: the app only has three pages — `/import` and `/plan` (plus `/`). The sidebar links to **`/trends`, `/backtest` and `/checks`**, and the SKU row links to **`/plan/[runId]/sku/[code]`**, all point to routes that do not exist yet (404 in the running app) even though their engine logic and API routes (`/api/trends`, `/api/backtest`, `/api/checks`) work and are covered by tests. Do not click those links expecting a working screen; use the API routes directly or `npm test` to see that functionality. Railway GitHub autodeploy was cancelled; the app has not been deployed. See [Known limitations](#limitations-and-safety) for the full list.
 
 ## Run from a clean checkout
 
@@ -30,13 +30,13 @@ Local PostgreSQL is exposed on port **55432**. `DATABASE_URL` is mandatory. `OPE
 
 ## Manager walkthrough
 
-1. **Import:** choose Upload workbooks or Load demo dataset. Inspect the active dataset name, synthetic label, source files and row-level audit. Each interactive import creates a separate dataset.
-2. **Plan:** choose supplier/category and planning assumptions. Calculate proposals with urgency, confidence, ABC/XYZ, editable quantities and explanations.
-3. **SKU detail:** inspect raw, cleaned and compensated demand, seasonal forecast, dated stock projection, excluded invoices and uncertainty. Restore anomalies or override uncertain inputs explicitly.
-4. **Scenario:** change growth, lead time, review period or category policy and compare results with the original run.
+1. **Import** (`/import`): choose Upload workbooks or Load demo dataset. Inspect the active dataset name, synthetic label, source files and row-level audit. Each interactive import creates a separate dataset.
+2. **Plan** (`/plan`): choose supplier/category and planning assumptions. Calculate proposals with urgency, confidence, ABC/XYZ, editable quantities and explanations.
+3. **SKU detail (API only — no page yet):** the plan table links to `/plan/[runId]/sku/[code]`, which is **not implemented** and 404s. The same provenance (raw/cleaned/adjusted demand, seasonal forecast, dated stock projection, excluded invoices, availability sensitivity band) is available today from `GET /api/runs/[id]` — each recommendation carries its full `history`, `projection` and `anomalies`.
+4. **Scenario:** on `/plan`, change growth, lead time, review period or category policy and compare results with the original run ("Сравнить сценарий").
 5. **Approval:** enter an approver name and acknowledge estimated inputs. Approval uses optimistic revision checking; an intervening edit causes a conflict. Edits invalidate active approval.
 6. **Export:** download XLSX, configurable-column CSV, or an email draft from the frozen approved revision. Nothing sends orders to suppliers.
-7. **Evidence:** run live case checks, historical backtests and category trends. An API key enables the advisory assistant, not approval authority.
+7. **Evidence (API only — no page yet):** the sidebar links to `/checks`, `/backtest` and `/trends` **404** — those UI pages are unbuilt. The underlying logic is real and tested: call `GET /api/checks` for the five live must-have proofs, `GET /api/backtest?datasetId=...` for the chronological backtest, and `GET /api/trends?datasetId=...` for ABC/XYZ and category demand. An `OPENAI_API_KEY` enables the advisory assistant (`/api/agent`, wired into the `/plan` Copilot panel), not approval authority.
 
 ## Data and synthetic demonstration
 
@@ -78,10 +78,11 @@ npm test
 npm run build
 ```
 
-GitHub Actions is configured to run these checks on pushes and pull requests; the checkpoint's known failures are not suppressed. Railway configuration uses the Dockerfile, a PostgreSQL service, `DATABASE_URL=${{Postgres.DATABASE_URL}}`, migrations plus demo import during pre-deploy, and `/api/health`. Only synthetic files enter the image. GitHub autodeploy is not connected and was cancelled by the user; future deployments can use the CLI manually. See the runbook for exact deployment verification; configured infrastructure is not itself proof of a healthy release.
+All four commands pass at this checkpoint (Prisma 7.10.0 client generation, Next 16.3.6/Turbopack build, ESLint 9, `vitest run` — 5 files / 62 tests). GitHub Actions is configured to run the same checks on pushes and pull requests. Railway configuration uses the Dockerfile, a PostgreSQL service, `DATABASE_URL=${{Postgres.DATABASE_URL}}`, migrations plus demo import during pre-deploy, and `/api/health`. Only synthetic files enter the image. GitHub autodeploy is not connected and was cancelled by the user; future deployments can use the CLI manually. See the runbook for exact deployment verification; configured infrastructure is not itself proof of a healthy release, and the app has not actually been deployed to Railway yet.
 
 ## Limitations and safety
 
+- **UI coverage is incomplete.** Only `/`, `/import` and `/plan` exist. `/checks`, `/backtest`, `/trends` and the SKU drill-down page `/plan/[runId]/sku/[code]` are linked from the sidebar and the plan table but not implemented — following them 404s. Their logic is real and tested and is reachable directly through `GET /api/checks`, `GET /api/backtest`, `GET /api/trends` and `GET /api/runs/[id]` (which carries each recommendation's full history/projection/anomalies).
 - This is a shared, unauthenticated demonstration. An approver's typed name is attribution, not verified identity. **Do not upload confidential partner data to the public instance.** Dataset IDs are not access controls.
 - Real files have no customer IDs. Invoice numbers identify orders, not people or customers. Customer-concentration detection is demonstrated only with labelled synthetic customer IDs.
 - Real stockouts and IEK current balances are estimates. Overdue ETAs are not receipts; unknown stock requires review. Lost-sales values are estimates, not measured recovery or revenue.

@@ -52,11 +52,31 @@ export async function saveRun(datasetId:string,result:PlanResult,filter:PlanFilt
 }
 export async function getRun(id:string):Promise<RunView>{const r=await getDb().run.findUnique({where:{id},include:{orders:true}});if(!r)throw new AppError("Run not found",404);return runView(r);}
 export async function listRuns(datasetId?:string){return getDb().run.findMany({where:datasetId?{datasetId}:{},select:{id:true,datasetId:true,createdAt:true,baseRunId:true,_count:{select:{orders:true}}},orderBy:{createdAt:"desc"},take:30});}
+const MAX_ORDER_QUANTITY=1_000_000;
+const PIECE_UNITS=new Set(["шт","штук","pcs","pc"]);
+function validateEditedQuantity(quantity:number,unit:string|undefined):void{
+  if(typeof quantity!=="number"||!Number.isFinite(quantity))throw new AppError("Quantity must be a finite number");
+  if(quantity<0)throw new AppError("Quantity cannot be negative");
+  if(quantity>MAX_ORDER_QUANTITY)throw new AppError("Quantity is unreasonably large");
+  if(unit&&PIECE_UNITS.has(unit)&&!Number.isInteger(quantity))throw new AppError("Quantity must be a whole number for piece units");
+}
+function validateApproverName(approver:string):string{
+  const trimmed=approver.trim();
+  if(!trimmed)throw new AppError("Approver name is required");
+  if(trimmed.length>200)throw new AppError("Approver name is too long");
+  return trimmed;
+}
 export async function editOrder(id:string,expectedRevision:number,edits:{key:string;quantity:number}[]):Promise<OrderView>{
  return getDb().$transaction(async tx=>{
   const o=await tx.order.findUnique({where:{id},include:{run:true}});if(!o)throw new AppError("Order not found",404);
-  const quantities={...o.quantities as Record<string,number>};
-  for(const e of edits){if(!(e.key in quantities))throw new AppError("Product does not belong to this order");quantities[e.key]=e.quantity;}
+  const quantities=Object.assign(Object.create(null) as Record<string,number>,o.quantities as Record<string,number>);
+  const recs=(o.run.result as unknown as PlanResult).recommendations.filter(r=>r.supplier===o.supplier);
+  const units=new Map(recs.map(r=>[r.key,r.unit]));
+  for(const e of edits){
+    if(!Object.hasOwn(quantities,e.key))throw new AppError("Product does not belong to this order");
+    validateEditedQuantity(e.quantity,units.get(e.key));
+    quantities[e.key]=e.quantity;
+  }
   const updated=await tx.order.updateMany({where:{id,revision:expectedRevision},data:{quantities:json(quantities),revision:{increment:1},status:"DRAFT",approver:null,approvedAt:null,approvedKeys:[]}});
   if(!updated.count)throw new AppError("This order changed. Reload it before saving.",409);
   await tx.auditEvent.create({data:{orderId:id,action:"EDIT",revision:expectedRevision+1,detail:json(edits)}});
@@ -64,13 +84,14 @@ export async function editOrder(id:string,expectedRevision:number,edits:{key:str
  });
 }
 export async function approveOrder(id:string,expectedRevision:number,approver:string,acknowledgedEstimates:boolean,keys?:string[]):Promise<OrderView>{
+ const approverName=validateApproverName(approver);
  return getDb().$transaction(async tx=>{
   const o=await tx.order.findUnique({where:{id},include:{run:true}});if(!o)throw new AppError("Order not found",404);
-  const quantities=o.quantities as Record<string,number>;
+  const quantities=Object.assign(Object.create(null) as Record<string,number>,o.quantities as Record<string,number>);
   const recs=(o.run.result as unknown as PlanResult).recommendations.filter(r=>r.supplier===o.supplier);
   const selected=keys??recs.filter(r=>quantities[r.key]>0).map(r=>r.key);
   if(!selected.length)throw new AppError("Select at least one positive order line");
-  if(new Set(selected).size!==selected.length||selected.some(k=>!(k in quantities)))throw new AppError("Invalid selected order lines");
+  if(new Set(selected).size!==selected.length||selected.some(k=>!Object.hasOwn(quantities,k)))throw new AppError("Invalid selected order lines");
   const lines:ExportLine[]=selected.map(k=>{const recommendation=recs.find(r=>r.key===k);if(!recommendation)throw new AppError("Recommendation missing");return{recommendation,quantity:quantities[k]};});
   for(const {quantity:q,recommendation:r} of lines){
     if(!Number.isFinite(q)||q<=0)throw new AppError("Approved quantities must be positive");
@@ -79,10 +100,10 @@ export async function approveOrder(id:string,expectedRevision:number,approver:st
   }
   if(lines.some(l=>l.recommendation.needsReview||l.recommendation.confidence==="low")&&!acknowledgedEstimates)throw new AppError("Acknowledge estimated inputs and review warnings before approval");
   const revision=expectedRevision+1;
-  const changed=await tx.order.updateMany({where:{id,revision:expectedRevision},data:{status:"APPROVED",revision,approver,approvedAt:new Date(),approvedKeys:json(selected)}});
+  const changed=await tx.order.updateMany({where:{id,revision:expectedRevision},data:{status:"APPROVED",revision,approver:approverName,approvedAt:new Date(),approvedKeys:json(selected)}});
   if(!changed.count)throw new AppError("This order changed. Reload it before approval.",409);
-  await tx.approval.create({data:{orderId:id,revision,approver,acknowledgedEstimates,snapshot:json(lines)}});
-  await tx.auditEvent.create({data:{orderId:id,action:"APPROVE",actor:approver,revision,detail:json({keys:selected})}});
+  await tx.approval.create({data:{orderId:id,revision,approver:approverName,acknowledgedEstimates,snapshot:json(lines)}});
+  await tx.auditEvent.create({data:{orderId:id,action:"APPROVE",actor:approverName,revision,detail:json({keys:selected})}});
   return orderView(await tx.order.findUniqueOrThrow({where:{id}}));
  });
 }
