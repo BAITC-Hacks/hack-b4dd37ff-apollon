@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { ArrowUpRight, Sparkles, X } from "lucide-react";
 import type { DatasetSummary } from "@/lib/contracts/api";
 import type { ImportIssue, SourceFile, SourceRef } from "@/lib/contracts/engine";
@@ -76,12 +76,31 @@ export function Workspace({ children }: { children: ReactNode }) {
   </WorkspaceContext.Provider>;
 }
 
+function chatContent(message: string): ReactNode[] {
+  const links = /\[([^\]]+)\]\((\/(?!\/)[^\s)]+)\)/g;
+  const content: ReactNode[] = [];
+  let end = 0;
+  for (const match of message.matchAll(links)) {
+    const start = match.index ?? 0;
+    if (start > end) content.push(message.slice(end, start));
+    content.push(<a href={match[2]} key={start}>{match[1]}</a>);
+    end = start + match[0].length;
+  }
+  if (end < message.length) content.push(message.slice(end));
+  return content;
+}
+
 export function Copilot({ runId }: { runId?: string }) {
   const { datasetId } = useWorkspace();
+  const launcherRef = useRef<HTMLButtonElement>(null);
+  const questionRef = useRef<HTMLTextAreaElement>(null);
+  const closeRef = useRef<HTMLButtonElement>(null);
   const [open, setOpen] = useState(false); const [configured, setConfigured] = useState<boolean | null>(null);
   const [input, setInput] = useState(""); const [busy, setBusy] = useState(false); const [error, setError] = useState("");
   const [messages, setMessages] = useState<{ role: "user" | "assistant"; text: string }[]>([]);
   useEffect(() => { api<{ copilotConfigured: boolean }>("/api/health").then(r => setConfigured(r.copilotConfigured)).catch(() => setConfigured(false)); }, []);
+  useEffect(() => { if (open) (questionRef.current?.disabled ? closeRef.current : questionRef.current)?.focus(); }, [open, configured]);
+  function closePanel() { setOpen(false); requestAnimationFrame(() => launcherRef.current?.focus()); }
   async function send() {
     if (!input.trim() || busy || !datasetId) return;
     const message = input.trim(); setInput(""); setError(""); setBusy(true); setMessages(m => [...m, { role: "user", text: message }, { role: "assistant", text: "" }]);
@@ -95,5 +114,5 @@ export function Copilot({ runId }: { runId?: string }) {
     finally { setBusy(false); }
   }
   if (!datasetId) return null;
-  return <><button className="copilot-launcher" onClick={() => setOpen(true)}><Sparkles size={18}/> Помощник по закупкам</button>{open && <section className="copilot-panel" aria-label="Помощник по закупкам"><header><div><Sparkles size={20}/><strong>Apollon Copilot</strong></div><button className="icon-button" aria-label="Закрыть помощника" onClick={() => setOpen(false)}><X size={19}/></button></header><div className="copilot-body"><div className="copilot-intro">Помогу разобрать расчёт, проверить аномалии и сравнить сценарии. Утверждение заказа остаётся за вами.</div>{configured === false && <div className="notice">Ассистент не подключён. Для его работы требуется серверный OPENAI_API_KEY. Расчёты и утверждение доступны без ключа.</div>}{messages.map((m, i) => <div className={`chat-message ${m.role}`} key={i}><small>{m.role === "user" ? "Вы" : "Apollon"}</small><p>{m.text || (busy ? "Анализирую данные…" : "Ответ не получен")}</p></div>)}<ErrorNotice error={error}/></div><form onSubmit={e => { e.preventDefault(); void send(); }}><label className="sr-only" htmlFor="copilot-question">Вопрос ассистенту</label><textarea id="copilot-question" placeholder="Почему этой позиции нужен заказ?" value={input} onChange={e => setInput(e.target.value)} disabled={!configured || busy || !datasetId}/><button className="button primary" disabled={!configured || busy || !input.trim() || !datasetId}>{busy ? "Анализ…" : "Отправить"}<ArrowUpRight size={15}/></button></form></section>}</>;
+  return <>{!open && <button ref={launcherRef} type="button" className="copilot-launcher" onClick={() => setOpen(true)}><Sparkles size={18} aria-hidden="true"/>{configured ? "Что заказать? Спросите Copilot" : "Помощник по закупкам"}</button>}{open && <section id="copilot-panel" className="copilot-panel" aria-label="Помощник по закупкам" onKeyDown={e => { if (e.key === "Escape") { e.preventDefault(); closePanel(); } }}><header><div><Sparkles size={20} aria-hidden="true"/><strong>Apollon Copilot</strong></div><button ref={closeRef} type="button" className="icon-button" aria-label="Закрыть помощника" onClick={closePanel}><X size={19} aria-hidden="true"/></button></header><div className="copilot-body" role="log" aria-live="polite" aria-relevant="additions text"><div className="copilot-intro">Помогу разобрать расчёт, проверить аномалии и сравнить сценарии. Утверждение заказа остаётся за вами.</div>{configured === false && <div className="notice">Ассистент не подключён. Для его работы требуется серверный OPENAI_API_KEY. Расчёты и утверждение доступны без ключа.</div>}{messages.map((m, i) => <div className={`chat-message ${m.role}`} key={i}><small>{m.role === "user" ? "Вы" : "Apollon"}</small><p>{m.text ? chatContent(m.text) : (busy ? "Анализирую данные…" : "Ответ не получен")}</p></div>)}<ErrorNotice error={error}/></div><form onSubmit={e => { e.preventDefault(); void send(); }}><label className="sr-only" htmlFor="copilot-question">Вопрос ассистенту</label><textarea ref={questionRef} id="copilot-question" name="question" autoComplete="off" placeholder="Например, почему этой позиции нужен заказ?" value={input} onChange={e => setInput(e.target.value)} onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); e.currentTarget.form?.requestSubmit(); } }} disabled={!configured || busy || !datasetId}/><div className="copilot-form-footer"><span>Enter — отправить · Shift+Enter — новая строка</span><button type="submit" className="button primary" disabled={!configured || busy || !input.trim() || !datasetId}>{busy ? "Анализ…" : "Отправить"}<ArrowUpRight size={15} aria-hidden="true"/></button></div></form></section>}</>;
 }

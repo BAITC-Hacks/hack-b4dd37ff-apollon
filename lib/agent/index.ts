@@ -82,7 +82,7 @@ export function createProcurementWorkflow(scope: AgentScope, services: AgentServ
       const filter: PlanFilter = { ...(supplier ? { supplier } : {}), ...(category ? { category } : {}) };
       const result = calculatePlan(await dataset(), overrides(scenario, category), filter);
       currentRun = await services.saveRun(scope.datasetId, result, filter, scope.runId); calculated = result;
-      return { status: "DRAFT", runId: currentRun.id, url: `/plan?runId=${encodeURIComponent(currentRun.id)}`, lines: result.recommendations.length, recommendations: result.recommendations.slice(0, 20).map(summarizeRecommendation), warningCount: result.warnings.length, omittedLines: Math.max(0, result.recommendations.length - 20) };
+      return { status: "DRAFT", runId: currentRun.id, url: `/runs/${encodeURIComponent(currentRun.id)}`, lines: result.recommendations.length, recommendations: result.recommendations.slice(0, 20).map(summarizeRecommendation), warningCount: result.warnings.length, omittedLines: Math.max(0, result.recommendations.length - 20) };
     },
   });
   const explainSku = tool({
@@ -123,7 +123,7 @@ export function createProcurementWorkflow(scope: AgentScope, services: AgentServ
       const result: PlanResult = { ...source.result, recommendations: source.result.recommendations.filter(p => p.supplier === supplier) };
       if (!result.recommendations.length) throw new Error("В расчёте нет строк выбранного поставщика.");
       const draft = await services.saveRun(scope.datasetId, result, { supplier }, source.id);
-      return { status: "DRAFT", runId: draft.id, orders: draft.orders.map(order => ({ id: order.id, supplier: order.supplier, revision: order.revision, status: order.status })), url: `/plan?runId=${encodeURIComponent(draft.id)}`, approvalRequiredInApplication: true };
+      return { status: "DRAFT", runId: draft.id, orders: draft.orders.map(order => ({ id: order.id, supplier: order.supplier, revision: order.revision, status: order.status })), url: `/runs/${encodeURIComponent(draft.id)}`, approvalRequiredInApplication: true };
     },
   });
   const tools = [inspectDataQuality, calculateReplenishment, explainSku, compareScenario, listAnomalies, draftSupplierOrder];
