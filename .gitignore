@@ -1,4 +1,23 @@
 .omc/
 CLAUDE.md
-case and data/
 .DS_Store
+case and data/*
+!case and data/Hackathon_task.md
+node_modules/
+.next/
+generated/
+.env
+.env.*
+!.env.example
+*.tsbuildinfo
+playwright-report/
+test-results/
+coverage/
+*.log
+~$*.xlsx
+.railway/
+artifacts/
+IEK/
+Systeme electric/
+*.pem
+*.key
