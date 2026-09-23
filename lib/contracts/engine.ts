@@ -1,9 +1,9 @@
 /** Pure serializable domain contracts. No persistence or framework dependencies. */
 export type Supplier = "IEK" | "SE";
 export type Confidence = "high" | "medium" | "low";
-export interface SourceRef { file: string; sheet?: string; row?: number }
+export interface SourceRef { file: string; sheet?: string; row?: number; cell?: string; workbookId?: string }
 export interface ImportIssue { severity: "info" | "warning" | "error"; message: string; code?: string; supplier?: Supplier; source?: SourceRef }
-export interface SourceFile { name: string; hash: string; supplier: Supplier; kind: string; rows: number }
+export interface SourceFile { name: string; hash: string; supplier: Supplier; kind: string; rows: number; workbookId?: string }
 export interface Product {
   code: string; name: string; supplierArticle: string; unit: string; category: string;
   cost?: number; moq?: number; multiple?: number; unitConversion?: number; growthRate?: number; source?: SourceRef;

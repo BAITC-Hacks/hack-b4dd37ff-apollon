@@ -1,5 +1,4 @@
 import { afterAll, describe, expect, it } from "vitest";
-import { config } from "dotenv";
 import { randomUUID } from "node:crypto";
 import { getDb } from "../../lib/db";
 import { approveOrder, approvedExport, editOrder, getRun, json, loadDataset, orderAudit, saveDataset, saveRun } from "../../lib/repo";
@@ -7,8 +6,7 @@ import { calculatePlan } from "../../lib/engine";
 import { makeEngineFixture } from "../fixtures/engine";
 import type { DatasetInput, PlanResult } from "../../lib/contracts/engine";
 
-// Local .env is optional; a clean checkout/CI without DATABASE_URL skips only DB tests.
-config({ quiet: true });
+// Explicit production wrapper only; never read a stale local Docker URL from .env.
 const created = new Set<string>();
 function input(): DatasetInput {
   const data = makeEngineFixture({ seasonal: true, customer: true });
@@ -52,10 +50,10 @@ describe.skipIf(!process.env.DATABASE_URL)("repository transactions (PostgreSQL)
     data.suppliers[0].transactions.push({ code: "SYN-001", invoice: "RETURN", date: "2026-09-10", quantity: -3, source: { file: "source.xlsx", sheet: "Лист_1", row: 42 } });
     data.suppliers[0].issues.push({ severity: "warning", code: "TEST", message: "Синтетический аудит" });
     const saved = await save(data);
-    expect(await loadDataset(saved.id)).toEqual(JSON.parse(JSON.stringify(data)));
+    expect(await loadDataset(saved.id, { includeLegacy: true })).toEqual(JSON.parse(JSON.stringify(data)));
     expect(saved.productCount).toBe(1); expect(saved.issueCount).toBe(1);
   });
-  it("creates separate interactive datasets but reuses identical deploy seeds", async () => {
+  it("creates separate interactive datasets but reuses identical derived snapshots", async () => {
     const data = input();
     const first = await save(data), second = await save(data);
     expect(first.id).not.toBe(second.id);

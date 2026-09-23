@@ -4,8 +4,8 @@ import Image from "next/image";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowDownToLine, ArrowRight, ArrowUpDown, Check, CheckCheck, ChevronDown, ChevronLeft, ChevronRight,
-  Database, FileClock, FileSpreadsheet, FlaskConical, FolderUp, History, Play, Save, Search,
-  ShieldCheck, SlidersHorizontal, Sparkles, TriangleAlert, UploadCloud, X,
+  Database, FileClock, FileSpreadsheet, FolderUp, History, Play, Save, Search,
+  ShieldCheck, Sparkles, TriangleAlert, UploadCloud, X,
 } from "lucide-react";
 import type { DatasetSummary, OrderView, RunView } from "@/lib/contracts/api";
 import { DEFAULT_POLICY, type Policy, type Recommendation } from "@/lib/contracts/engine";
@@ -15,7 +15,7 @@ import { DataExplorer } from "./data-explorer";
 import { ChecksDashboard } from "./checks-dashboard";
 import { BacktestDashboard } from "./backtest-dashboard";
 import { TrendsDashboard } from "./trends-dashboard";
-import { api, Copilot, dateLabel, ErrorNotice, LoadingState, Metric, num, supplierLabel, useWorkspace } from "./workspace";
+import { api, categoryLabel, Copilot, dateLabel, ErrorNotice, LoadingState, Metric, num, supplierLabel, useWorkspace } from "./workspace";
 
 type RunSummary = { id: string; createdAt: string; baseRunId: string | null };
 type AuditEvent = { id: string; createdAt: string; action?: string; type?: string; actor?: string; payload?: unknown; details?: unknown };
@@ -38,7 +38,7 @@ export function OrderWorkspace() {
   const { datasetId, dataset, datasets, details, loading: datasetsLoading, error: datasetError, selectDataset, refresh } = useWorkspace();
 
   // ---- Data source (upload / case data) ----
-  const [sourceOpen, setSourceOpen] = useState(true);
+  const [sourceOpen, setSourceOpen] = useState(false);
   const [files, setFiles] = useState<File[]>([]);
   const [uploadName, setUploadName] = useState("");
   const [uploadSupplier, setUploadSupplier] = useState("");
@@ -84,7 +84,6 @@ export function OrderWorkspace() {
   const categories = useMemo(() => [...new Set((details?.suppliers || []).filter(s => !supplier || s.supplier === supplier).flatMap(s => s.categories))].sort(), [details, supplier]);
   const issues = useMemo(() => (details?.suppliers || []).flatMap(s => s.issues.map(i => ({ ...i, supplier: i.supplier || s.supplier }))), [details]);
   const blocking = issues.filter(i => i.severity === "error");
-  const warnings = issues.filter(i => i.severity === "warning");
   const hasEdits = Object.keys(edits).length > 0;
   const needsRecalc = !!run && (JSON.stringify(policy) !== JSON.stringify(committedPolicy) || supplier !== committedScope.supplier || category !== committedScope.category);
 
@@ -241,12 +240,11 @@ export function OrderWorkspace() {
     resetToSource();
   }
   function resetToSource() {
-    selectDataset(""); setRun(undefined); setRuns([]); setEdits({}); setSelected([]);
+    setRun(undefined); setRuns([]); setEdits({}); setSelected([]);
     setPolicy(DEFAULT_POLICY); setCommittedPolicy(DEFAULT_POLICY); setSupplier(""); setCategory(""); setCommittedScope({ supplier: "", category: "" });
-    setSourceOpen(true); setError(""); setSuccess(""); setConfirmNewCalc(false);
+    setSourceOpen(!datasetId); setError(""); setSuccess(""); setConfirmNewCalc(false);
   }
 
-  const datasetIssueCount = details ? issues.length : 0;
 
   return <div className="app-shell">
     <header className="app-header">
@@ -263,8 +261,8 @@ export function OrderWorkspace() {
     <ErrorNotice error={datasetError || error}/>
     {success && <div className="notice" role="status"><Check size={14} style={{ display: "inline", verticalAlign: "-3px", marginRight: 7 }}/>{success}</div>}
 
-    {(sourceOpen || !datasetId) ? <>
-      <div className="page-heading no-margin"><div><h1>Рассчитайте заказ поставщику</h1><p>Загрузите свои отчёты или используйте подготовленные данные кейса.</p></div></div>
+    {datasetsLoading && !datasetId ? <LoadingState text="Загружаем данные…"/> : (sourceOpen || !datasetId) ? <>
+      <div className="page-heading no-margin"><div><h1>Данные для расчёта</h1><p>Выберите сохранённые отчёты или загрузите новые.</p></div>{datasetId && <button className="button" onClick={() => setSourceOpen(false)}>Вернуться к расчёту</button>}</div>
       <div className="source-cards">
         <section className="card"><header className="card-header"><div><h2>Загрузить свои отчёты</h2><p>Каждая загрузка создаёт отдельный набор данных.</p></div><span className="badge">XLSX</span></header><div className="card-body">
           <div className="upload-drop" onDragOver={e => e.preventDefault()} onDrop={e => { e.preventDefault(); setFiles(Array.from(e.dataTransfer.files)); }}>
@@ -279,23 +277,23 @@ export function OrderWorkspace() {
           </div>
           <button className="button primary" disabled={!files.length || !!sourceBusy} onClick={() => void importData()}>{sourceBusy === "upload" ? <span className="spinner"/> : <FolderUp size={15}/>} {sourceBusy === "upload" ? "Импортируем и проверяем…" : "Загрузить отчёты"}</button>
           <ErrorNotice error={sourceError}/>
-          <details className="advanced-policy"><summary className="subtle-summary">Какие файлы нужны и где взять примеры <ChevronDown size={12} style={{ display: "inline" }}/></summary>
+          <details className="advanced-policy"><summary className="subtle-summary">Какие файлы нужны <ChevronDown size={12} style={{ display: "inline" }}/></summary>
             <ul style={{ margin: "8px 0 0", paddingLeft: 18, fontSize: 14, color: "var(--muted)", lineHeight: 1.9 }}>{REQUIRED_REPORTS.map(r => <li key={r}>{r}</li>)}</ul>
-            <p className="chart-caption">Примеры файлов IEK и Systeme Electric лежат в каталоге <code>sample-data/</code> репозитория (см. sample-data/README.md) — их можно загрузить сюда напрямую.</p>
+            <p className="chart-caption">Загрузите исходные отчёты поставщика. Файлы сохраняются целиком; замечания к их содержимому будут показаны перед расчётом.</p>
           </details>
         </div></section>
         <section className="card demo-card"><div className="card-body">
-          <div className="demo-symbol"><FlaskConical size={26}/></div>
-          <div className="eyebrow">Можно начать без своих файлов</div>
+          <div className="demo-symbol"><Database size={26}/></div>
+          <div className="eyebrow">Сохранённые отчёты поставщиков</div>
           <h2>Использовать данные кейса</h2>
-          <p>Сохранённые в базе наборы данных, подготовленные для расчёта.</p>
-          {datasetsLoading ? <LoadingState text="Загружаем список наборов…"/> : datasets.length === 0 ? <p className="chart-caption">Наборов для расчёта пока нет. Сохранённые исходные книги требуют отдельного сопоставления полей перед расчётом.</p> : <div className="dataset-list">
-            {datasets.map(d => <div className="dataset-list-row" key={d.id}>
-              <div><strong>{d.name}</strong><span className={`badge ${d.synthetic ? "demo" : "teal"}`} style={{ marginLeft: 8 }}>{d.synthetic ? "Демо-данные" : "Данные кейса"}</span>
+          <p>Данные кейса из PostgreSQL: исходные отчёты IEK и Systeme Electric, подготовленные для расчёта.</p>
+          {datasetsLoading ? <LoadingState text="Загружаем список наборов…"/> : datasets.length === 0 ? <p className="chart-caption">Наборов для расчёта пока нет. Обновите список после подготовки данных или загрузите свои отчёты.</p> : <div className="dataset-list">
+            {datasets.filter(d => !d.synthetic).map(d => <div className="dataset-list-row" key={d.id}>
+              <div><strong>{d.name}</strong>
                 <div className="dataset-suppliers">{[...new Set(d.files.map(f => f.supplier).filter(Boolean))].map(s => <SupplierLogo key={s} supplier={String(s)} size="sm"/>)}</div>
-                <div className="product-code">{num(d.productCount)} товаров · данные на {dateLabel(d.cutoffDate)} · загружено {dateLabel(d.createdAt)}{d.issueCount ? ` · ${num(d.issueCount)} замечаний` : ""}</div>
+                <div className="product-code">{num(d.productCount)} товаров · данные на {dateLabel(d.cutoffDate)} · загружено {dateLabel(d.createdAt)}</div>
               </div>
-              <button className="button small" onClick={() => selectDataset(d.id)}>Использовать <ArrowRight size={12}/></button>
+              <button className="button small" onClick={() => { selectDataset(d.id); setSourceOpen(false); }}>Использовать <ArrowRight size={12}/></button>
             </div>)}
           </div>}
           <button className="button dark" disabled={!!sourceBusy} onClick={() => void refreshData()} style={{ marginTop: 14 }}>{sourceBusy === "refresh" ? <span className="spinner"/> : <Database size={15}/>} {sourceBusy === "refresh" ? "Обновляем список…" : "Обновить список данных"}<ArrowRight size={14}/></button>
@@ -304,46 +302,26 @@ export function OrderWorkspace() {
     </> : null}
 
     {datasetId && !sourceOpen && <>
-      <div className="context-bar">
-        <div><Database size={14}/><strong>{dataset?.name || "…"}</strong><span className={`badge ${dataset?.synthetic ? "demo" : "teal"}`}>{dataset?.synthetic ? "Демо-данные" : "Данные кейса"}</span></div>
-        <span className="context-bar-detail">{dataset ? `Данные на ${dateLabel(dataset.cutoffDate)} · ${num(dataset.productCount)} товаров` : ""}{supplier ? ` · ${supplierLabel(supplier)}` : " · все поставщики"}{category ? ` · категория ${category}` : ""}</span>
-        <button className="button small" onClick={() => setSourceOpen(true)}>Изменить данные</button>
+      <div className="page-heading procurement-heading">
+        <div><h1>Заказ поставщику</h1><p>{dataset ? `Данные на ${dateLabel(dataset.cutoffDate)}` : "Загружаем данные…"}</p></div>
+        <details className="data-actions" onKeyDown={event => { if (event.key === "Escape") { event.currentTarget.open = false; event.currentTarget.querySelector("summary")?.focus(); } }}><summary>Данные <ChevronDown size={14} aria-hidden="true"/></summary><div className="data-actions-menu">
+          <button className="button" onClick={() => setExplorerOpen(true)}><Search size={14} aria-hidden="true"/>Просмотреть данные</button>
+          <button className="button" onClick={() => setSourceOpen(true)}><FolderUp size={14} aria-hidden="true"/>Изменить / загрузить отчёты</button>
+          <button className="button" onClick={() => setReviewDialogOpen(true)}><ShieldCheck size={14} aria-hidden="true"/>Проверка расчёта</button>
+        </div></details>
       </div>
 
       {datasetsLoading ? <LoadingState/> : <>
-        <section className="card">
-          <header className="card-header"><div><h2>Проверка данных перед расчётом</h2><p>{details ? details.name : "Загружаем сводку…"}</p></div>
-            <div style={{ display: "flex", gap: 8 }}>
-              <button className="button small" onClick={() => setExplorerOpen(true)}><Search size={12}/> Просмотреть данные</button>
-              <button className="button small" onClick={() => setReviewDialogOpen(true)}><ShieldCheck size={12}/> Проверка расчёта</button>
-            </div>
-          </header>
-          {!details ? <div className="card-body"><LoadingState text="Читаем сводку набора данных…"/></div> : <div className="card-body">
-            <div className="metrics" style={{ marginBottom: 0 }}>
-              <Metric label="Товаров в наборе" value={num(details.suppliers.reduce((n, s) => n + s.productCount, 0))} detail={`${details.suppliers.length} поставщика`} tone="teal"/>
-              <Metric label="Строк операций" value={num(details.suppliers.reduce((n, s) => n + s.transactionCount, 0))} detail="История продаж" />
-              <Metric label="Исходных файлов" value={num(details.files.length)} detail={`Данные на ${dateLabel(details.cutoffDate)}`}/>
-              <Metric label="Замечаний" value={num(datasetIssueCount)} detail={blocking.length ? `${blocking.length} требуют внимания` : warnings.length ? `${warnings.length} предупреждений` : "Критичных нет"} tone={blocking.length ? "red" : warnings.length ? "orange" : ""}/>
-            </div>
-            {blocking.length > 0 && <div className="notice danger" style={{ marginTop: 16 }}><strong>Требует внимания перед расчётом ({blocking.length}):</strong> данные с такими замечаниями учтены расчётом как предположения — результат будет предварительным. Откройте «Просмотреть данные», чтобы уточнить исходные файлы.</div>}
-            {warnings.length > 0 && <details className="notice warning" style={{ marginTop: blocking.length ? 10 : 16 }}><summary>Предупреждения, не блокирующие расчёт · {warnings.length}</summary>{warnings.slice(0, 30).map((w, i) => <p key={i}>{supplierLabel(w.supplier || "")}: {w.message}</p>)}</details>}
-            <div className="table-scroll" style={{ marginTop: 16 }}><table><thead><tr><th>Поставщик</th><th>Товаров</th><th>Категории</th><th>Замечания</th></tr></thead><tbody>
-              {details.suppliers.map(s => <tr key={s.supplier}><td><span className="drawer-supplier"><SupplierLogo supplier={s.supplier} size="sm"/><strong>{supplierLabel(s.supplier)}</strong></span></td><td>{num(s.productCount)}</td><td>{s.categories.filter(Boolean).join(", ") || "Не указаны"}</td><td>{num(s.issues.length)}</td></tr>)}
-            </tbody></table></div>
-          </div>}
-        </section>
-
-        <section className="card">
-          <header className="card-header"><div><h2><SlidersHorizontal size={16} style={{ display: "inline", verticalAlign: "-3px", marginRight: 8 }}/> Параметры расчёта</h2><p>Область расчёта. Расширенные настройки планирования — ниже.</p></div>
-            <button className="button primary" disabled={!datasetId || calcBusy} onClick={() => void calculate()}>{calcBusy ? <span className="spinner"/> : <Play size={14}/>} {run ? "Пересчитать" : "Рассчитать заказ"}</button>
-          </header>
+        <section className="card procurement-start">
           <div className="card-body">
-            {needsRecalc && <div className="notice warning" style={{ marginBottom: 14 }}><TriangleAlert size={13} style={{ display: "inline", verticalAlign: "-2px", marginRight: 6 }}/>Параметры изменены — требуется пересчёт. Таблица ниже показывает результат предыдущего расчёта.</div>}
-            <div className="policy-grid" style={{ gridTemplateColumns: "repeat(2,minmax(0,1fr))" }}>
-              <label className="field"><span>Область расчёта — поставщик</span><select value={supplier} onChange={e => { setSupplier(e.target.value); setCategory(""); }}><option value="">Все поставщики</option>{(details?.suppliers || []).map(s => <option key={s.supplier} value={s.supplier}>{supplierLabel(s.supplier)}</option>)}</select></label>
-              <label className="field"><span>Категория</span><select value={category} onChange={e => setCategory(e.target.value)}><option value="">Все категории</option>{categories.map(c => <option key={c} value={c}>{c || "Без категории"}</option>)}</select></label>
+            <div className="procurement-controls">
+              <label className="field"><span>Поставщик</span><select value={supplier} onChange={e => { setSupplier(e.target.value); setCategory(""); }}><option value="">Все поставщики</option>{(details?.suppliers || []).map(s => <option key={s.supplier} value={s.supplier}>{supplierLabel(s.supplier)}</option>)}</select></label>
+              <button className="button primary" disabled={!datasetId || !details || calcBusy} onClick={() => void calculate()}>{calcBusy ? <span className="spinner"/> : <Play size={16} aria-hidden="true"/>} {calcBusy ? "Рассчитываем…" : run ? "Пересчитать заказ" : "Рассчитать заказ"}</button>
             </div>
+            {blocking.length > 0 && <p className="notice warning">В исходных данных есть ошибки. Перед утверждением проверьте отмеченные рекомендации. <button className="button small" onClick={() => setExplorerOpen(true)}>Просмотреть данные</button></p>}
+            {needsRecalc && <div className="notice warning" style={{ marginBottom: 14 }}><TriangleAlert size={13} style={{ display: "inline", verticalAlign: "-2px", marginRight: 6 }}/>Параметры изменены — требуется пересчёт. Таблица ниже показывает результат предыдущего расчёта.</div>}
             <details className="advanced-policy"><summary className="subtle-summary">Расширенные настройки планирования <ChevronDown size={12} style={{ display: "inline" }}/></summary>
+              {categories.some(c => c && c !== "unknown") && <label className="field category-scope"><span>Категория</span><select value={category} onChange={e => setCategory(e.target.value)}><option value="">Все категории</option>{categories.map(c => <option key={c} value={c}>{categoryLabel(c)}</option>)}</select></label>}
               <p className="chart-caption">Изменение любого параметра ниже требует нового расчёта. Фильтры таблицы результатов (поиск, срочность) на расчёт не влияют.</p>
               <div className="inline-controls" style={{ marginTop: 10 }}>
                 <label className="field"><span>Срок поставки, дней</span><input type="number" min={1} max={365} value={policy.leadTimeDays} onChange={e => updatePolicy("leadTimeDays", Number(e.target.value))}/></label>
@@ -354,18 +332,17 @@ export function OrderWorkspace() {
                 <label className="field"><span>Как применять рост</span><select value={policy.growthMode} onChange={e => updatePolicy("growthMode", e.target.value as Policy["growthMode"])}><option value="replace">Заменить оценённый тренд</option><option value="additive">Добавить к тренду</option></select></label>
               </div>
               <div className="policy-toggles"><label className="checkbox-label"><input type="checkbox" checked={policy.stockoutCompensation} onChange={e => updatePolicy("stockoutCompensation", e.target.checked)}/> Компенсация упущенного спроса при дефиците</label><label className="checkbox-label"><input type="checkbox" checked={policy.outlierFiltering} onChange={e => updatePolicy("outlierFiltering", e.target.checked)}/> Исключение разовых заказов из спроса</label></div>
-              {categories.length > 0 && <><p className="chart-caption" style={{ marginTop: 14 }}>Политики по категориям — необязательные переопределения общих настроек выше.</p>
-              <div className="category-policy-grid">{categories.map(c => <div className="field" key={c}><span>Категория {c || "без категории"}</span>
-                <label className="field"><span>Уровень сервиса, %</span><input type="number" min={50} max={99.9} step={.1} aria-label={`Сервис категории ${c}`} value={Number(((policy.categoryServiceLevels[c] ?? policy.serviceLevel) * 100).toFixed(2))} onChange={e => updatePolicy("categoryServiceLevels", { ...policy.categoryServiceLevels, [c]: Number(e.target.value) / 100 })}/></label>
-                <label className="field"><span>Минимальный запас, дней</span><input type="number" min={0} max={180} aria-label={`Запас категории ${c}`} value={policy.categorySafetyDays[c] ?? policy.safetyDays} onChange={e => updatePolicy("categorySafetyDays", { ...policy.categorySafetyDays, [c]: Number(e.target.value) })}/></label>
-                <label className="field"><span>Резервный спрос, ед./мес</span><input type="number" min={0} placeholder="Из истории" aria-label={`Резервный спрос категории ${c}`} value={policy.categoryFallbackDemand[c] ?? ""} onChange={e => updatePolicy("categoryFallbackDemand", { ...policy.categoryFallbackDemand, [c]: e.target.value === "" ? undefined as unknown as number : Number(e.target.value) })}/></label>
+              {categories.some(c => c && c !== "unknown") && <><p className="chart-caption" style={{ marginTop: 14 }}>Политики по категориям — необязательные переопределения общих настроек выше.</p>
+              <div className="category-policy-grid">{categories.filter(c => c && c !== "unknown").map(c => <div className="field" key={c}><span>Категория {categoryLabel(c)}</span>
+                <label className="field"><span>Уровень сервиса, %</span><input type="number" min={50} max={99.9} step={.1} aria-label={`Сервис категории ${categoryLabel(c)}`} value={Number(((policy.categoryServiceLevels[c] ?? policy.serviceLevel) * 100).toFixed(2))} onChange={e => updatePolicy("categoryServiceLevels", { ...policy.categoryServiceLevels, [c]: Number(e.target.value) / 100 })}/></label>
+                <label className="field"><span>Минимальный запас, дней</span><input type="number" min={0} max={180} aria-label={`Запас категории ${categoryLabel(c)}`} value={policy.categorySafetyDays[c] ?? policy.safetyDays} onChange={e => updatePolicy("categorySafetyDays", { ...policy.categorySafetyDays, [c]: Number(e.target.value) })}/></label>
+                <label className="field"><span>Резервный спрос, ед./мес</span><input type="number" min={0} placeholder="Из истории" aria-label={`Резервный спрос категории ${categoryLabel(c)}`} value={policy.categoryFallbackDemand[c] ?? ""} onChange={e => updatePolicy("categoryFallbackDemand", { ...policy.categoryFallbackDemand, [c]: e.target.value === "" ? undefined as unknown as number : Number(e.target.value) })}/></label>
               </div>)}</div></>}
             </details>
           </div>
         </section>
 
-        {runLoading ? <LoadingState text="Открываем сохранённый расчёт…"/> : !run ? <div className="empty-state"><div className="empty-icon"><Play size={25}/></div><h2>Данные готовы к расчёту</h2><p>Задайте область расчёта выше и нажмите «Рассчитать заказ». Apollon учтёт историю спроса, остатки, сезонность и ожидаемые поставки.</p></div> : <>
-          {run.result.warnings.length > 0 && <details className="notice warning"><summary>Допущения расчёта · {run.result.warnings.length}</summary>{run.result.warnings.map((w, i) => <p key={i}>{w}</p>)}</details>}
+        {runLoading ? <LoadingState text="Открываем сохранённый расчёт…"/> : !run ? <p className="chart-caption procurement-hint">Выберите поставщика и рассчитайте заказ. Затем проверьте рекомендации и подтвердите количество.</p> : <>
           <div className="metrics">
             <Metric label="Позиций в расчёте" value={num(recommendations.length)} detail={`${new Set(recommendations.map(r => r.supplier)).size} поставщика · ${dateLabel(run.result.cutoffDate)}`} tone="teal"/>
             <Metric label="Требуют заказа" value={num(recommendations.filter(r => quantity(r) > 0).length)} detail="Потребность после учёта остатков"/>
@@ -403,7 +380,7 @@ export function OrderWorkspace() {
               return <SupplierRows key={s} supplier={s} count={supplierRows.length} unitTotals={unitTotals} costTotal={hasCost ? costTotal : null} costMissing={costMissing} order={order} dirty={!!dirty} busy={!!rowBusy} onSave={() => order && void saveEdits(order)} onApprove={() => { if (order) { setApproval({ order, keys: selectedKeys.length ? selectedKeys : undefined }); setAcknowledged(false); setError(""); } }} onAudit={() => order && void showAudit(order)} onDownload={format => order && void download(order, format)} selectedCount={selectedKeys.length}>
                 {rows.map(r => <tr key={r.key}>
                   <td><input type="checkbox" aria-label={`Выбрать ${r.code}`} checked={selected.includes(r.key)} onChange={() => toggleKey(r.key)}/></td>
-                  <td><button className="product-name table-heading-button" style={{ display: "block", textAlign: "left" }} onClick={() => setDrawerKey(r.key)}>{r.name}</button><span className="product-code">{r.supplierArticle || r.code} · {r.unit} <span className="badge" style={{ fontSize: 12, padding: "1px 4px", marginLeft: 4 }}>{r.abc}{r.xyz}</span>{r.needsReview && <span title="Требует проверки" style={{ color: "#b38f4d", marginLeft: 5 }}>●</span>}</span></td>
+                  <td><span className="product-name" title={r.name}>{r.name}</span><span className="product-code">{r.supplierArticle || r.code} · {r.unit} <span className="badge" style={{ fontSize: 12, padding: "1px 4px", marginLeft: 4 }}>{r.abc}{r.xyz}</span>{r.needsReview && <span className="badge warning" style={{ marginLeft: 5 }}>Требует проверки</span>}</span></td>
                   <td className="number">{r.provenance.stockKind === "current" ? num(r.provenance.availableStock, 1) : r.provenance.stockKind === "unknown" ? "нет данных" : <>{num(r.provenance.availableStock, 1)}<span className="product-code">оценка</span></>}</td>
                   <td className="number">{num(r.provenance.eligibleInbound, 1)}</td>
                   <td className="number">{r.coverDays == null ? "нет данных" : num(r.coverDays, 1)}</td>
@@ -411,7 +388,7 @@ export function OrderWorkspace() {
                   <QuantityCell rec={r} value={edits[r.key] ?? quantity(r)} edited={r.key in edits} approved={!!order?.approvedKeys.includes(r.key)} onChange={v => setEdits(current => ({ ...current, [r.key]: v }))} onReset={() => setEdits(current => { const next = { ...current }; delete next[r.key]; return next; })}/>
                   <td><span className={`badge ${r.urgency}`}>{urgencyLabels[r.urgency]}</span></td>
                   <td><span className={`badge ${r.confidence}-confidence`}>{confidenceLabels[r.confidence]}</span></td>
-                  <td><button className="icon-button" aria-label={`Обоснование ${r.code}`} onClick={() => setDrawerKey(r.key)}><ArrowRight size={14}/></button></td>
+                  <td><button className="button explanation-button" onClick={() => setDrawerKey(r.key)}>Смотреть объяснение<ArrowRight size={16} aria-hidden="true"/></button></td>
                 </tr>)}
               </SupplierRows>; })}
               {visible.length === 0 && <tr><td colSpan={10} style={{ textAlign: "center", padding: 35, color: "var(--muted)" }}>Нет позиций по выбранным условиям отображения</td></tr>}
@@ -436,7 +413,7 @@ export function OrderWorkspace() {
     </div>}
 
     {/* Approval modal */}
-    {approval && <div className="modal-backdrop"><section className="modal" role="dialog" aria-modal="true" aria-labelledby="approve-title"><header><h2 id="approve-title">Утверждение заказа</h2><button className="icon-button" aria-label="Закрыть" onClick={() => setApproval(undefined)} disabled={rowBusy === "approve"}><X size={18}/></button></header><div className="modal-body"><p>Проверьте допущения и подтвердите количество. Утверждённые данные будут зафиксированы для экспорта.</p><ErrorNotice error={error}/><div className="approval-summary"><strong>{supplierLabel(approval.order.supplier)}</strong> · версия {approval.order.revision}<br/>{approval.keys ? `${approval.keys.length} выбранных позиций` : "Все позиции поставщика с положительным количеством"}</div><label className="field"><span>Ответственный сотрудник</span><input placeholder="Имя и фамилия" value={approver} onChange={e => setApprover(e.target.value)} autoFocus/></label><label className="checkbox-label"><input type="checkbox" checked={acknowledged} onChange={e => setAcknowledged(e.target.checked)}/> Я проверил расчёт, оценки остатков и предупреждения</label><p className="chart-caption">В демонстрации имя записывается в историю без проверки личности.</p></div><footer><button className="button" onClick={() => setApproval(undefined)} disabled={rowBusy === "approve"}>Отмена</button><button className="button primary" disabled={!!rowBusy || approver.trim().length < 2 || !acknowledged} onClick={() => void approve()}>{rowBusy === "approve" ? "Утверждаем…" : "Утвердить заказ"}<Check size={14}/></button></footer></section></div>}
+    {approval && <div className="modal-backdrop"><section className="modal" role="dialog" aria-modal="true" aria-labelledby="approve-title"><header><h2 id="approve-title">Утверждение заказа</h2><button className="icon-button" aria-label="Закрыть" onClick={() => setApproval(undefined)} disabled={rowBusy === "approve"}><X size={18}/></button></header><div className="modal-body"><p>Проверьте допущения и подтвердите количество. Утверждённые данные будут зафиксированы для экспорта.</p><ErrorNotice error={error}/><div className="approval-summary"><strong>{supplierLabel(approval.order.supplier)}</strong> · версия {approval.order.revision}<br/>{approval.keys ? `${approval.keys.length} выбранных позиций` : "Все позиции поставщика с положительным количеством"}</div><label className="field"><span>Ответственный сотрудник</span><input placeholder="Имя и фамилия" value={approver} onChange={e => setApprover(e.target.value)} autoFocus/></label><label className="checkbox-label"><input type="checkbox" checked={acknowledged} onChange={e => setAcknowledged(e.target.checked)}/> Я проверил расчёт, оценки остатков и предупреждения</label><p className="chart-caption">Имя записывается в историю утверждения без проверки личности.</p></div><footer><button className="button" onClick={() => setApproval(undefined)} disabled={rowBusy === "approve"}>Отмена</button><button className="button primary" disabled={!!rowBusy || approver.trim().length < 2 || !acknowledged} onClick={() => void approve()}>{rowBusy === "approve" ? "Утверждаем…" : "Утвердить заказ"}<Check size={14}/></button></footer></section></div>}
 
     {/* Audit modal */}
     {audit && <div className="modal-backdrop"><section className="modal" role="dialog" aria-modal="true" aria-labelledby="audit-title"><header><h2 id="audit-title">История · {supplierLabel(audit.supplier)}</h2><button className="icon-button" aria-label="Закрыть историю" onClick={() => setAudit(undefined)}><X size={18}/></button></header><div className="modal-body">{audit.events.length ? audit.events.map(e => <div className="audit-row" key={e.id}><FileClock size={16}/><div><strong>{e.action || e.type || "Изменение"}</strong>{e.actor && <p>{e.actor}</p>}<pre>{JSON.stringify(e.payload || e.details || {}, null, 2)}</pre><small>{new Date(e.createdAt).toLocaleString("ru-RU")}</small></div></div>) : <p>Событий пока нет.</p>}</div></section></div>}
@@ -455,7 +432,7 @@ export function OrderWorkspace() {
       <ErrorNotice error={historyError}/>
       {!history ? <LoadingState text="Загружаем историю…"/> : history.length === 0 ? <p>Расчётов пока нет.</p> : <div className="history-list">{history.map(h => <button key={h.id} className="history-row" onClick={() => openHistoryEntry(h)}>
         <div><strong>{dateLabel(h.createdAt)}</strong> <span className="product-code">{new Date(h.createdAt).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" })}</span></div>
-        <div className="product-code">{h.datasetName} · <span className={`badge ${h.synthetic ? "demo" : "teal"}`} style={{ fontSize: 12 }}>{h.synthetic ? "Демо" : "Кейс"}</span> · {h.scope?.supplier ? supplierLabel(h.scope.supplier) : "все поставщики"}{h.scope?.category ? ` · ${h.scope.category}` : ""}</div>
+        <div className="product-code">{h.datasetName} · <span className={`badge ${h.synthetic ? "demo" : "teal"}`} style={{ fontSize: 12 }}>{h.synthetic ? "Демо" : "Кейс"}</span> · {h.scope?.supplier ? supplierLabel(h.scope.supplier) : "все поставщики"}{h.scope?.category ? ` · ${categoryLabel(h.scope.category)}` : ""}</div>
         <div className="history-orders">{h.orders.map(o => <span key={o.supplier} className={`badge ${o.status}`}>{supplierLabel(o.supplier)}: {o.status === "APPROVED" ? `утверждён v${o.revision}` : "черновик"}</span>)}</div>
       </button>)}</div>}
     </div></section></div>}

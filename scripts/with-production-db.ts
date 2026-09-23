@@ -8,7 +8,7 @@ const connection = await productionDatabaseConnection();
 console.log(JSON.stringify({ databaseTarget: PRODUCTION }));
 try {
   process.exitCode = await new Promise<number>((resolve, reject) => {
-    const child = spawn(command, args, { env: { ...process.env, DATABASE_URL: connection.url }, stdio: "inherit" });
+    const child = spawn(command, args, { env: { ...process.env, DATABASE_URL: connection.url, APOLLON_PRODUCTION_RELAY: "1" }, stdio: "inherit" });
     child.once("error", reject); child.once("close", code => resolve(code ?? 1));
   });
 } finally { await connection.close(); }

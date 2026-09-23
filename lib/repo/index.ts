@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { getDb } from "@/lib/db";
+import { SOURCE_MAPPING_VERSION } from "@/lib/ingest/source-mapping";
 import type { Prisma, Dataset, Order, Run } from "@/generated/prisma/client";
 import type { DatasetInput, SupplierInput, Product, PlanResult, PlanFilter, Recommendation, Policy } from "@/lib/contracts/engine";
 import type { DatasetSummary, OrderView, RunView, ExportLine } from "@/lib/contracts/api";
@@ -11,10 +12,10 @@ const datasetSelect = { id: true, name: true, synthetic: true, cutoffDate: true,
 function summary(d: Pick<Dataset, "id"|"name"|"synthetic"|"cutoffDate"|"createdAt"|"files"|"issues"> & {_count:{products:number}}): DatasetSummary {
   return {id:d.id,name:d.name,synthetic:d.synthetic,cutoffDate:d.cutoffDate,createdAt:d.createdAt.toISOString(),files:d.files as unknown as DatasetInput["files"],productCount:d._count.products,issueCount:Array.isArray(d.issues)?d.issues.length:0};
 }
-export async function listDatasets(): Promise<DatasetSummary[]> { return (await getDb().dataset.findMany({select:datasetSelect,orderBy:{createdAt:"desc"},take:100})).map(summary); }
+export async function listDatasets(): Promise<DatasetSummary[]> { return (await getDb().dataset.findMany({where:{synthetic:false,parserVersion:SOURCE_MAPPING_VERSION},select:datasetSelect,orderBy:{createdAt:"desc"},take:100})).map(summary); }
 export async function saveDataset(input: DatasetInput, parserVersion: string, options: { reuseExisting?: boolean } = {}): Promise<DatasetSummary> {
   const db=getDb();
-  const hash=createHash("sha256").update(JSON.stringify({parserVersion,cutoff:input.cutoffDate,synthetic:input.synthetic,files:input.files.map(f=>`${f.supplier}:${f.name}:${f.hash}`).sort(),importId:options.reuseExisting?undefined:randomUUID()})).digest("hex");
+  const hash=createHash("sha256").update(JSON.stringify({parserVersion,cutoff:input.cutoffDate,synthetic:input.synthetic,files:input.files.map(f=>`${f.supplier}:${f.name}:${f.hash}:${f.workbookId??""}`).sort(),importId:options.reuseExisting?undefined:randomUUID()})).digest("hex");
   const existing=await db.dataset.findUnique({where:{contentHash:hash},select:datasetSelect}); if(existing) return summary(existing);
   if(!input.suppliers.some(s=>s.products.length)) throw new AppError("No valid products were found. Check workbook headers and supplier selection.");
   try {
@@ -33,13 +34,35 @@ export async function saveDataset(input: DatasetInput, parserVersion: string, op
     const raced=await db.dataset.findUnique({where:{contentHash:hash},select:datasetSelect}); if(raced)return summary(raced); throw error;
   }
 }
-export async function loadDataset(id:string):Promise<DatasetInput>{
-  const d=await getDb().dataset.findUnique({where:{id},include:{products:true}}); if(!d)throw new AppError("Dataset not found",404);
+export async function loadDataset(id:string, options: { includeLegacy?: boolean } = {}):Promise<DatasetInput>{
+  const db=getDb();
+  const d=await db.dataset.findUnique({where:{id},select:{name:true,synthetic:true,cutoffDate:true,parserVersion:true,files:true,suppliers:true}}); if(!d)throw new AppError("Dataset not found",404);
+  if(!options.includeLegacy && (d.synthetic || d.parserVersion!==SOURCE_MAPPING_VERSION))throw new AppError("Выберите актуальный набор из исходных данных PostgreSQL.",410);
   const meta=d.suppliers as unknown as Pick<SupplierInput,"supplier"|"seasonality"|"issues">[];
-  return {name:d.name,synthetic:d.synthetic,cutoffDate:d.cutoffDate,files:d.files as unknown as DatasetInput["files"],suppliers:meta.map(m=>{
-    const ps=d.products.filter(p=>p.supplier===m.supplier);
-    return {...m,products:ps.map(p=>p.attributes as unknown as Product),sales:ps.flatMap(p=>p.monthlySales as unknown as SupplierInput["sales"]),stocks:ps.flatMap(p=>p.stockHistory as unknown as SupplierInput["stocks"]),currentStock:ps.flatMap(p=>p.currentStock as unknown as SupplierInput["currentStock"]),transactions:ps.flatMap(p=>p.transactions as unknown as SupplierInput["transactions"]),deliveries:ps.flatMap(p=>p.deliveries as unknown as SupplierInput["deliveries"]),stockouts:ps.flatMap(p=>p.stockouts as unknown as SupplierInput["stockouts"])};
-  })};
+  const suppliers:SupplierInput[]=meta.map(m=>({...m,products:[],sales:[],stocks:[],currentStock:[],transactions:[],deliveries:[],stockouts:[]}));
+  const bySupplier=new Map(suppliers.map(s=>[s.supplier,s]));
+  // Decode bounded result pages rather than one JSON-heavy Product relation. Keep only
+  // the final normalized facts; product/page wrappers can be collected between queries.
+  const append=<T>(target:T[],source:T[])=>{for(const row of source)target.push(row);};
+  let afterId:string|undefined;
+  while(true){
+    const page=await db.product.findMany({where:{datasetId:id,...(afterId?{id:{gt:afterId}}:{})},orderBy:{id:"asc"},take:100,
+      select:{id:true,supplier:true,attributes:true,monthlySales:true,stockHistory:true,currentStock:true,transactions:true,deliveries:true,stockouts:true}});
+    if(!page.length)break;
+    for(const p of page){
+      const supplier=bySupplier.get(p.supplier as SupplierInput["supplier"]);
+      if(!supplier)throw new AppError("Product supplier is missing from dataset metadata",500);
+      supplier.products.push(p.attributes as unknown as Product);
+      append(supplier.sales,p.monthlySales as unknown as SupplierInput["sales"]);
+      append(supplier.stocks,p.stockHistory as unknown as SupplierInput["stocks"]);
+      append(supplier.currentStock,p.currentStock as unknown as SupplierInput["currentStock"]);
+      append(supplier.transactions,p.transactions as unknown as SupplierInput["transactions"]);
+      append(supplier.deliveries,p.deliveries as unknown as SupplierInput["deliveries"]);
+      append(supplier.stockouts,p.stockouts as unknown as SupplierInput["stockouts"]);
+    }
+    afterId=page[page.length-1].id;
+  }
+  return {name:d.name,synthetic:d.synthetic,cutoffDate:d.cutoffDate,files:d.files as unknown as DatasetInput["files"],suppliers};
 }
 function orderView(o:Order):OrderView{return{id:o.id,supplier:o.supplier,revision:o.revision,status:o.status as OrderView["status"],approver:o.approver,approvedAt:o.approvedAt?.toISOString()??null,quantities:o.quantities as Record<string,number>,approvedKeys:o.approvedKeys as string[]};}
 function runView(r:Run & {orders:Order[]}):RunView{return{id:r.id,datasetId:r.datasetId,createdAt:r.createdAt.toISOString(),result:r.result as unknown as PlanResult,orders:r.orders.map(orderView)};}
@@ -51,7 +74,7 @@ export async function saveRun(datasetId:string,result:PlanResult,filter:PlanFilt
   return view;
 }
 export async function getRun(id:string):Promise<RunView>{const r=await getDb().run.findUnique({where:{id},include:{orders:true}});if(!r)throw new AppError("Run not found",404);return runView(r);}
-export async function listRuns(datasetId?:string){return getDb().run.findMany({where:datasetId?{datasetId}:{},select:{id:true,datasetId:true,createdAt:true,baseRunId:true,_count:{select:{orders:true}}},orderBy:{createdAt:"desc"},take:30});}
+export async function listRuns(datasetId?:string){return getDb().run.findMany({where:{...(datasetId?{datasetId}:{}),dataset:{synthetic:false,parserVersion:SOURCE_MAPPING_VERSION}},select:{id:true,datasetId:true,createdAt:true,baseRunId:true,_count:{select:{orders:true}}},orderBy:{createdAt:"desc"},take:30});}
 const MAX_ORDER_QUANTITY=1_000_000;
 const PIECE_UNITS=new Set(["шт","штук","pcs","pc"]);
 function validateEditedQuantity(quantity:number,unit:string|undefined):void{

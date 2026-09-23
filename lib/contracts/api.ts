@@ -16,7 +16,7 @@ export const policySchema = z.object({
 export const runRequestSchema = z.object({ datasetId: z.string().min(1), policy: policySchema.default({}), supplier: z.enum(["IEK", "SE"]).optional(), category: z.string().optional(), baseRunId: z.string().optional() });
 export const editOrderSchema = z.object({ expectedRevision: z.number().int().nonnegative(), edits: z.array(z.object({ key: z.string(), quantity })).min(1).max(10000) });
 export const approveOrderSchema = z.object({ expectedRevision: z.number().int().nonnegative(), approver: z.string().trim().min(2).max(100), acknowledgedEstimates: z.boolean(), keys: z.array(z.string()).optional() });
-export const checksRequestSchema = z.object({ datasetId: z.string().min(1).max(200).optional() });
+export const checksRequestSchema = z.object({ datasetId: z.string().min(1).max(200) });
 export const backtestRequestSchema = z.object({ datasetId: z.string().min(1).max(200) });
 export interface DatasetSummary { id: string; name: string; synthetic: boolean; cutoffDate: string; createdAt: string; productCount: number; issueCount: number; files: DatasetInput["files"] }
 export interface OrderView { id: string; supplier: string; revision: number; status: "DRAFT" | "APPROVED"; approver: string | null; approvedAt: string | null; quantities: Record<string, number>; approvedKeys: string[] }

@@ -1,7 +1,10 @@
-import { parseWorkbooks, PARSER_VERSION } from "@/lib/ingest";
-import { saveDataset, withJob, AppError } from "@/lib/repo";
+import { guessSupplier } from "@/lib/ingest";
+import { parseRawWorkbook } from "@/lib/ingest/raw-workbook";
+import { saveRawWorkbook } from "@/lib/repo/raw-workbook";
+import { materializeSourceDataset } from "@/lib/repo/source-planning";
+import { getDb } from "@/lib/db";
+import { withJob, AppError } from "@/lib/repo";
 import { apiError, rejectCrossOrigin, readCappedBody, rateLimit } from "@/lib/http";
-import type { Supplier } from "@/lib/contracts/engine";
 export const runtime="nodejs";
 export const maxDuration=300;
 const MAX_UPLOAD_BYTES=80*1024*1024;
@@ -20,12 +23,16 @@ export async function POST(request:Request){try{
     if(!uploaded.length||uploaded.length>24)throw new AppError("Upload between 1 and 24 Excel workbooks");
     if(uploaded.reduce((n,f)=>n+f.size,0)>MAX_UPLOAD_BYTES)throw new AppError("Combined upload exceeds 80 MB",413);
     const supplier=form.get("supplier");
-    const files=await Promise.all(uploaded.map(async f=>{
-      if(!f.name.toLowerCase().endsWith(".xlsx")||f.name.startsWith("~$")||f.size>20*1024*1024)throw new AppError("Only .xlsx workbooks up to 20 MB each are supported");
-      return{name:f.name,buffer:Buffer.from(await f.arrayBuffer()),supplier:(supplier==="IEK"||supplier==="SE"?supplier:undefined) as Supplier|undefined};
-    }));
-    let parsed;
-    try{parsed=await parseWorkbooks(files,{name:String(form.get("name")||"Загруженные данные").slice(0,120),synthetic:false,cutoffDate:"2026-09-22"});}catch(e){throw new AppError(e instanceof Error?e.message:"Invalid workbook");}
-    return saveDataset(parsed,PARSER_VERSION);
+    const db=getDb(), ids:string[]=[];
+    for(const file of uploaded){
+      if(!file.name.toLowerCase().endsWith(".xlsx")||file.name.startsWith("~$")||file.size>20*1024*1024)throw new AppError("Only .xlsx workbooks up to 20 MB each are supported");
+      const sourceSupplier=supplier==="IEK"||supplier==="SE"?supplier:guessSupplier(file.name);
+      if(!sourceSupplier)throw new AppError("Укажите поставщика: его не удалось определить по имени файла.");
+      let book;
+      try{book=await parseRawWorkbook(Buffer.from(await file.arrayBuffer()));}catch{throw new AppError("Не удалось прочитать структуру XLSX. Проверьте файл.");}
+      const saved=await saveRawWorkbook(db,book,file.name,sourceSupplier);
+      ids.push(saved.id);
+    }
+    return materializeSourceDataset(db,[...new Set(ids)],String(form.get("name")||"Загруженные данные").slice(0,120));
   });return Response.json({dataset});
 }catch(e){return apiError(e);}}

@@ -12,6 +12,7 @@ async function main() {
   const connection = await productionDatabaseConnection();
   try {
     process.env.DATABASE_URL = connection.url;
+    process.env.APOLLON_PRODUCTION_RELAY = "1";
     const [{ getDb }, { saveRawWorkbook }] = await Promise.all([import("../lib/db"), import("../lib/repo/raw-workbook")]);
     const db = getDb();
     try {

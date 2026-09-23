@@ -14,8 +14,8 @@ export interface ImportOptions { name?: string; synthetic?: boolean; cutoffDate?
 export class ImportError extends Error {
   constructor(message: string) { super(message); this.name = "ImportError"; }
 }
-type Value = ExcelJS.CellValue | undefined;
-type Kind = "sales" | "stock" | "transactions" | "moq" | "transit" | "seasonality" | "supplement";
+export type Value = ExcelJS.CellValue | undefined;
+export type Kind = "sales" | "stock" | "transactions" | "moq" | "transit" | "seasonality" | "supplement";
 const MONTHS = ["янв", "фев", "мар", "апр", "май", "июн", "июл", "авг", "сен", "окт", "ноя", "дек"];
 
 /** ExcelJS 4.4 streaming decodes each buffer separately, splitting Cyrillic UTF-8.
@@ -74,7 +74,7 @@ export function parseNumber(value: Value): number | null {
   if (typeof v === "number") return Number.isFinite(v) ? v : null;
   if (typeof v !== "string" || !v.trim()) return null;
   const clean = v.replace(/[\s\u00a0\u202f]/g, "").replace(",", ".");
-  if (!/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)%?$/.test(clean)) return null;
+  if (!/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?%?$/.test(clean)) return null;
   const n = Number(clean.replace("%", ""));
   return Number.isFinite(n) ? n / (clean.endsWith("%") ? 100 : 1) : null;
 }
@@ -83,6 +83,7 @@ function norm(value: Value): string { return str(value).toLowerCase().replace(/�
 export function parseMonth(value: Value): string | null {
   const v = scalar(value);
   if (v instanceof Date) return v.toISOString().slice(0, 7);
+  if ((typeof v === "number" || typeof v === "string" && /^\d+(?:\.\d+)?$/.test(v)) && Number(v) > 30000 && Number(v) < 80000) return parseDate(value)?.slice(0, 7) ?? null;
   const text = norm(value);
   const iso = text.match(/^(20\d{2})-(0[1-9]|1[0-2])(?:-\d{2})?$/);
   if (iso) return `${iso[1]}-${iso[2]}`;
@@ -93,7 +94,7 @@ export function parseMonth(value: Value): string | null {
 export function parseDate(value: Value, defaultYear?: number): string | null {
   const v = scalar(value);
   if (v instanceof Date) return Number.isNaN(v.getTime()) ? null : v.toISOString().slice(0, 10);
-  if (typeof v === "number" && v > 30000 && v < 80000) return new Date(Date.UTC(1899, 11, 30) + Math.round(v * 86400000)).toISOString().slice(0, 10);
+  if ((typeof v === "number" || typeof v === "string" && /^\d+(?:\.\d+)?$/.test(v)) && Number(v) > 30000 && Number(v) < 80000) return new Date(Date.UTC(1899, 11, 30) + Math.round(Number(v) * 86400000)).toISOString().slice(0, 10);
   if (typeof v !== "string") return null;
   const iso = v.match(/\b(20\d{2})-(\d{2})-(\d{2})\b/);
   const ru = v.match(/\b(\d{1,2})\.(\d{1,2})(?:\.(20\d{2}))?\b/);
@@ -106,37 +107,54 @@ export function parseDate(value: Value, defaultYear?: number): string | null {
   const date = new Date(Date.UTC(year, month - 1, day));
   return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day ? date.toISOString().slice(0, 10) : null;
 }
-function guessSupplier(name: string): Supplier | undefined {
+export function guessSupplier(name: string): Supplier | undefined {
   if (/system|syseme|систем|сэ|(?:^|[/ _-])se(?:[/ _.-]|$)/i.test(name)) return "SE";
   if (/iek|иэк/i.test(name)) return "IEK";
   // These are the two original IEK export names without an explicit supplier.
   if (/Динамика продаж_2025-2026|Ежемесячные продажи в количественном выражении за последние 2 года/i.test(name)) return "IEK";
 }
-function emptySupplier(supplier: Supplier): SupplierInput {
+export function emptySupplier(supplier: Supplier): SupplierInput {
   return { supplier, products: [], sales: [], stocks: [], currentStock: [], transactions: [], deliveries: [], stockouts: [], seasonality: Array(12).fill(1), issues: [] };
 }
-interface Context {
+export interface Context {
   data: SupplierInput; products: Map<string, Product>; kinds: Set<Kind>;
   sales: Map<string, { index: number; priority: number }>; stock: Set<string>;
   moq: Map<string, string>; transit: Map<string, string>; current: Set<string>;
   transitRows: Map<string, string>;
   errors: Map<string, number>;
 }
-function addIssue(ctx: Context, code: string, message: string, source?: SourceRef, severity: ImportIssue["severity"] = "warning") {
+export function addIssue(ctx: Context, code: string, message: string, source?: SourceRef, severity: ImportIssue["severity"] = "warning") {
   const count = ctx.errors.get(code) || 0;
   ctx.errors.set(code, count + 1);
   // Keep detailed first 100 examples per class, with a complete aggregate count below.
   if (count < 100) ctx.data.issues.push({ severity, code, message, supplier: ctx.data.supplier, source });
 }
+function numberProblem(value: Value): string {
+  if (value && typeof value === "object" && !(value instanceof Date)) {
+    if ("error" in value) return `ошибка Excel ${value.error || "(тип error без значения)"}`;
+    if ("result" in value && value.result !== undefined && value.result !== null) return numberProblem(value.result);
+    if ("formula" in value || "sharedFormula" in value) return "формула без сохранённого вычисленного значения";
+  }
+  return str(value) ? "значение не является числом" : "пустая ячейка";
+}
+export function sourceColumn(source: SourceRef, column: number): SourceRef {
+  let letters = "", n = column;
+  while (n > 0) { n--; letters = String.fromCharCode(65 + n % 26) + letters; n = Math.floor(n / 26); }
+  return column > 0 && source.row ? { ...source, cell: `${letters}${source.row}` } : source;
+}
 function numeric(ctx: Context, value: Value, source: SourceRef, field: string): number | null {
   const n = parseNumber(value);
-  if (n === null && value !== null && value !== undefined && str(value) !== "" || n === null && typeof value === "object" && value !== null && !(value instanceof Date)) {
-    addIssue(ctx, "INVALID_NUMBER", `Некорректное число / нет вычисленного значения: ${field}. Сохранено как неизвестное.`, source);
+  if (n === null && value && typeof value === "object" && "error" in value && !value.error) {
+    addIssue(ctx, "EMPTY_ERROR_CELL", `${field}: в источнике указан тип Excel error, но код ошибки и значение отсутствуют. Значение для расчёта неизвестно.`, source, "info");
+    return null;
+  }
+  if (n === null && (str(value) !== "" || typeof value === "object" && value !== null && !(value instanceof Date))) {
+    addIssue(ctx, "INVALID_NUMBER", `${field}: ${numberProblem(value)}. Значение для расчёта неизвестно.`, source);
   }
   return n;
 }
-interface Header { kind: Kind; columns: Value[]; code: number; name: number; unit: number; article: number; months: { col: number; month: string }[] }
-function findHeader(values: Value[], filename: string): Header | null {
+export interface Header { kind: Kind; columns: Value[]; code: number; name: number; unit: number; article: number; months: { col: number; month: string }[] }
+export function findHeader(values: Value[], filename: string): Header | null {
   const texts = values.map(norm);
   const find = (r: RegExp) => texts.findIndex((s) => r.test(s));
   const code = find(/^(номенклатура\.код|код\s*1[сc]|код|internal_code)$/);
@@ -176,7 +194,7 @@ function addSales(ctx: Context, code: string, month: string, quantity: number | 
     ctx.sales.set(key, { index: ctx.data.sales.length, priority }); ctx.data.sales.push({ code, month, quantity, source });
   }
 }
-function processRow(ctx: Context, h: Header, row: Value[], source: SourceRef, cutoff: string) {
+export function processRow(ctx: Context, h: Header, row: Value[], source: SourceRef, cutoff: string) {
   if (h.kind === "seasonality") {
     const monthIndex = MONTHS.findIndex((m) => norm(row[2]).startsWith(m));
     const coefficient = parseNumber(row[12]);
@@ -202,7 +220,7 @@ function processRow(ctx: Context, h: Header, row: Value[], source: SourceRef, cu
   const p = product(ctx, code, row, h, source);
   if (h.kind === "sales" || h.kind === "stock" || h.kind === "transit") {
     for (const { col: c, month } of h.months) {
-      const quantity = numeric(ctx, row[c], source, month);
+      const quantity = numeric(ctx, row[c], sourceColumn(source, c), month);
       if (h.kind === "stock") {
         const key = `${code}\0${month}`;
         if (ctx.stock.has(key)) { addIssue(ctx, "DUPLICATE_STOCK", `${code}, ${month}: повторный остаток; сохранён первый.`, source); continue; }
@@ -219,16 +237,17 @@ function processRow(ctx: Context, h: Header, row: Value[], source: SourceRef, cu
     const signature = `${str(row[h.article])}\0${str(row[col(h, /^кратность$|мин.*отгр|^moq$/)])}`;
     if (ctx.moq.has(code)) { addIssue(ctx, ctx.moq.get(code) === signature ? "DUPLICATE_MOQ" : "CONFLICTING_MOQ", `${code}: повтор MOQ; сохранена первая запись.`, source); return; }
     ctx.moq.set(code, signature);
-    const quantity = numeric(ctx, row[col(h, /^кратность$|мин.*отгр|^moq$/)], source, "MOQ/кратность");
+    const quantityCol = col(h, /^кратность$|мин.*отгр|^moq$/);
+    const quantity = parseNumber(row[quantityCol]);
     if (quantity !== null && quantity > 0) {
       if (col(h, /^кратность$/) >= 0) { p.multiple = quantity; p.moq = quantity; }
       else p.moq = quantity;
-    } else addIssue(ctx, "UNKNOWN_MOQ", `${code}: MOQ/кратность отсутствует или неположительна.`, source);
+    } else addIssue(ctx, "UNKNOWN_MOQ", `${code}: MOQ/кратность — ${quantity === null ? numberProblem(row[quantityCol]) : "неположительное значение"}. Значение для расчёта неизвестно.`, sourceColumn(source, quantityCol));
   }
   if (h.kind === "transactions") {
     const document = str(row[col(h, /^документ$/)]);
     if (!/^Расходная накладная(?:\s|$)/i.test(document)) { addIssue(ctx, "NON_SALES_DOCUMENT", `${code}: документ не является расходной накладной; исключён.`, source, "info"); return; }
-    const date = parseDate(row[col(h, /^дата$/)]), quantity = numeric(ctx, row[col(h, /^количество$/)], source, "Количество"), invoice = str(row[col(h, /^номер$/)]);
+    const date = parseDate(row[col(h, /^дата$/)]), quantity = numeric(ctx, row[col(h, /^количество$/)], sourceColumn(source, col(h, /^количество$/)), "Количество"), invoice = str(row[col(h, /^номер$/)]);
     if (!date || quantity === null || !invoice) { addIssue(ctx, "INVALID_TRANSACTION", `${code}: нет корректной даты, количества или номера накладной.`, source); return; }
     if (date > cutoff) { addIssue(ctx, "AFTER_CUTOFF", `${code}: накладная ${date} позднее среза ${cutoff}; исключена.`, source, "info"); return; }
     const customerId = str(row[col(h, /^anonymized_customer_id$/)]);
@@ -242,12 +261,12 @@ function processRow(ctx: Context, h: Header, row: Value[], source: SourceRef, cu
     const freeCol = col(h, /^свободный остаток$/);
     if (freeCol >= 0 && !ctx.current.has(code)) {
       ctx.current.add(code);
-      ctx.data.currentStock.push({ code, date: reportDate, available: numeric(ctx, row[freeCol], source, "Свободный остаток"), reserved: parseNumber(row[col(h, /^зарезервировано$/)]) ?? undefined, kind: "current", source });
+      ctx.data.currentStock.push({ code, date: reportDate, available: numeric(ctx, row[freeCol], sourceColumn(source, freeCol), "Свободный остаток"), reserved: parseNumber(row[col(h, /^зарезервировано$/)]) ?? undefined, kind: "current", source });
     }
     if (/закупаются бухтами/i.test(p.name)) addIssue(ctx, "UNIT_CONVERSION_REQUIRED", `${code}: закупка бухтами, остатки метрами. Коэффициент не выводится из названия; нужен явный unit_conversion.`, source);
     h.columns.forEach((header, index) => {
       if (!/поступление до|в пути \d/i.test(str(header))) return;
-      const quantity = numeric(ctx, row[index], source, "В пути");
+      const quantity = numeric(ctx, row[index], sourceColumn(source, index), "В пути");
       if (quantity === null || quantity === 0) return;
       const etaText = str(header).split(/поступление до/i).at(-1)!;
       const eta = parseDate(etaText, Number(reportDate.slice(0, 4)));
@@ -262,7 +281,7 @@ function processRow(ctx: Context, h: Header, row: Value[], source: SourceRef, cu
     });
   }
   if (h.kind === "supplement") {
-    const conversion = numeric(ctx, row[col(h, /^unit_conversion$/)], source, "unit_conversion");
+    const conversion = numeric(ctx, row[col(h, /^unit_conversion$/)], sourceColumn(source, col(h, /^unit_conversion$/)), "unit_conversion");
     if (conversion !== null && conversion > 0) p.unitConversion = conversion;
     const start = parseDate(row[col(h, /^stockout_start$/)]), end = parseDate(row[col(h, /^stockout_end$/)]);
     if (start && end && start <= end) ctx.data.stockouts.push({ code, start, end, confirmed: true });
@@ -274,7 +293,7 @@ function processRow(ctx: Context, h: Header, row: Value[], source: SourceRef, cu
   }
 }
 
-function finish(ctx: Context, cutoff: string) {
+export function finish(ctx: Context, cutoff: string, version = PARSER_VERSION) {
   const d = ctx.data;
   d.products = [...ctx.products.values()].sort((a, b) => a.code.localeCompare(b.code));
   for (const kind of ["sales", "stock", "transactions", "moq", "transit", "seasonality"] as Kind[]) {
@@ -305,7 +324,7 @@ function finish(ctx: Context, cutoff: string) {
   addIssue(ctx, "RECONCILIATION_SUMMARY", `Сверка SKU×месяц: ${compared} пар, ${exact} точных совпадений, ${within5} в пределах 5%. Месячные продажи — источник прогноза; накладные — детализация.`, undefined, "info");
   if (d.supplier === "SE" && ctx.kinds.has("transit")) addIssue(ctx, "LEGACY_13_MONTH_FORMULA", "В исходном TDSheet «последние 12 мес» охватывает 13 месяцев / 12. Готовые средние и сезонные формулы не используются. Свободный остаток уже за вычетом резерва; рост — ratio − 1.", undefined, "info");
   addIssue(ctx, "STOCK_BLANK_POLICY", "Пустые остатки сохранены как неизвестные. Движок может оценивать их как нулевые только внутри активного периода SKU; это оценка, не измеренный stockout.", undefined, "info");
-  addIssue(ctx, "PARSER_VERSION", `Парсер ${PARSER_VERSION}; SHA-256 включает версию. Формулы читаются только по сохранённому результату.`, undefined, "info");
+  addIssue(ctx, "PARSER_VERSION", `Интерпретация ${version}. Формулы читаются только по сохранённому результату; оригинальные данные не изменяются.`, undefined, "info");
   for (const [code, count] of ctx.errors) if (count > 100) d.issues.push({ severity: "info", code: `${code}_COUNT`, message: `Всего ${count} событий ${code}; показаны первые 100 примеров.`, supplier: d.supplier });
 }
 

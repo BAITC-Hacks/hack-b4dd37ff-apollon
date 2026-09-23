@@ -1,6 +1,7 @@
 /** Read-only, bounded/paginated queries for the "Данные" explorer. Never loads a full dataset into memory. */
 import { Prisma } from "@/generated/prisma/client";
 import { getDb } from "@/lib/db";
+import { SOURCE_MAPPING_VERSION } from "@/lib/ingest/source-mapping";
 import type { Product as ProductAttrs } from "@/lib/contracts/engine";
 
 export interface Page<T> { rows: T[]; total: number; page: number; pageSize: number }
@@ -79,7 +80,7 @@ export interface RunHistoryEntry { id: string; datasetId: string; datasetName: s
 export async function listRunHistory(datasetId?: string): Promise<RunHistoryEntry[]> {
   const db = getDb();
   const runs = await db.run.findMany({
-    where: datasetId ? { datasetId } : {},
+    where: { ...(datasetId ? { datasetId } : {}), dataset: { synthetic: false, parserVersion: SOURCE_MAPPING_VERSION } },
     select: {
       id: true, datasetId: true, createdAt: true, baseRunId: true, filter: true,
       dataset: { select: { name: true, synthetic: true } },

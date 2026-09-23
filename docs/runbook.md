@@ -7,14 +7,14 @@ The authoritative scope is [BUILD_PLAN.md](../BUILD_PLAN.md). Working rules are 
 **Done:**
 
 - Single-page manager workspace (`components/order-workspace.tsx`, mounted by `app/page.tsx`) covering choose data → validate → calculate → review → adjust → approve → export in one page, with a history panel (`GET /api/history`) and a «Проверка расчёта» dialog hosting checks/backtest/trends. The old `/import`, `/plan`, `/data`, `/checks`, `/backtest`, `/trends` and `/plan/[runId]/sku/[code]` pages were removed and now 404; their API routes are unchanged and are what the single page calls.
-- `npm run typecheck`, `npm run lint`, `npm test` (8 files / **85 of 85 tests pass**) and `npm run build` all pass clean.
+- `npm run typecheck`, `npm run lint`, `npm test` (**105 checks implemented**, including 9 PostgreSQL integration tests through the production relay) and `npm run build` all pass clean.
 - Security hardening: streaming body size caps, security headers, CSRF protection, rate limits and CSV/formula-injection guarding on exports.
 - Engine gaps closed: per-horizon/per-unit backtest metrics, anomaly-share confidence, category fallback demand, service-layer validation on `editOrder`/`approveOrder` (rejecting invalid quantities and inherited-key payloads), and the real Agents SDK handoff tool name.
 - A live Railway deployment exists (see [Railway](#railway) below) and responds on `/api/health`.
 
 **Pending:**
 
-- **Calculation mapping:** all twelve IEK and Systeme Electric workbooks are preserved and verified in production source tables (261,267 rows / 2,285,515 cells). Mapping these unchanged facts into planning datasets is separate work; raw import is complete.
+- **Calculation mapping:** all twelve IEK and Systeme Electric workbooks are preserved and verified in production source tables (261,267 rows / 2,285,515 cells). The case dataset is produced from these PostgreSQL rows by the versioned mapping; source IDs/hashes remain in the manifest.
 - **Data lifecycle:** Docker workbook copies, automatic seeding and demo-load HTTP action are removed. The live service pre-deploy configuration is migration-only (`npm run db:migrate`).
 - **Release verification:** deploy a committed checkout, require `SUCCESS` for its exact deployment ID, and check health and the disabled seed action. Calculation browser verification additionally requires a reviewed planning dataset.
 - **Live browser verification on Railway:** once the above land, re-run the [verification flow](#verification-flow) against the live URL, not just locally.
@@ -29,7 +29,7 @@ No tests were removed or disabled to make this status look better than it is.
 - Source imports use `scripts/import-source.ts`; byte archives and exact row/cell projections are stored in PostgreSQL. Synthetic workbooks are test fixtures only and never seed at startup.
 - Public demo results are synthetic. Results claimed for partner data must come from separately verified local imports. There is no authentication: never upload confidential data to the public shared instance.
 - `OPENAI_API_KEY` is optional and server-only. It **is configured** as a server-only Railway variable on the deployed service (never printed here, in Git, or in a `NEXT_PUBLIC_` variable). Without it, deterministic planning works and the assistant reports unavailable.
-- Use Railway production PostgreSQL for all database operations, including development. No local PostgreSQL or Compose database exists in the supported setup. Source records remain private and separate from public calculation datasets.
+- Use Railway production PostgreSQL for all database operations, including development. No local PostgreSQL or Compose database exists in the supported setup. Raw archives remain separate from the selected derived planning datasets.
 
 ## Native app with Railway production database
 
@@ -89,14 +89,14 @@ Inspect the exact deployment returned by upload. Do not treat queued/building as
 
 Calculation workflow (requires a separately mapped calculation dataset):
 
-1. Open `/`; select an existing PostgreSQL calculation dataset using "Использовать данные кейса". Refresh reads the database; it does not seed files. Raw source archives require reviewed mappings before appearing here.
+1. Open `/`; select an existing PostgreSQL calculation dataset using "Использовать данные кейса". Refresh reads the database; it does not seed files. The case list contains versioned source-backed datasets; old synthetic/legacy datasets are excluded.
 2. Calculate both suppliers. Inspect seasonal/growing products, stockout estimates and uncertainty, one-off invoices/customer fixture, inbound dates, category differences, MOQ/pack rounding, and reel/metre conversion in the results table and SKU drawer.
 3. Change policy or scope, recalculate, and compare quantity differences and SKU provenance against the prior run.
 4. Edit a proposed quantity; approve using a name and acknowledgement where required. Export XLSX, CSV and an email draft. Edits must invalidate approval; stale revisions must fail.
 5. Open «Проверка расчёта» and confirm the checks/backtest/trends tabs render live data from `/api/checks`, `/api/backtest`, `/api/trends`. Test the Copilot panel only with a configured API key; never substitute canned responses.
 6. Open «История расчётов» and confirm a saved run reopens without recalculating.
 
-Live (Railway, once reviewed calculation mappings are available): repeat steps 1–6 against https://apollon-production-59ea.up.railway.app and confirm `/api/health` returns `status: "ok"` first.
+Live (Railway, using the mapped case dataset): repeat steps 1–6 against https://apollon-production-59ea.up.railway.app and confirm `/api/health` returns `status: "ok"` first.
 
 ## Recovery and troubleshooting
 

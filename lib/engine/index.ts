@@ -203,10 +203,9 @@ export function calculatePlan(dataset: DatasetInput, overrides: Partial<Policy> 
   policy.leadTimeDays = Math.round(clamp(policy.leadTimeDays, 0, 730)); policy.reviewDays = Math.round(clamp(policy.reviewDays, 0, 365)); policy.safetyDays = clamp(policy.safetyDays, 0, 365); policy.serviceLevel = clamp(policy.serviceLevel, .5, .9999);
   const cutoff = dataset.cutoffDate.slice(0, 10);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(cutoff) || !Number.isFinite(dateOf(cutoff).getTime())) throw new Error("Некорректная дата расчёта");
-  const recommendations: Recommendation[] = [], planWarnings: string[] = [];
+  const recommendations: Recommendation[] = [];
   for (const input of dataset.suppliers) {
     if (filter.supplier && input.supplier !== filter.supplier) continue;
-    planWarnings.push(...input.issues.map(p => p.message));
     const sales = grouped(input.sales), stocks = grouped(input.stocks), snapshots = grouped(input.currentStock), transactions = grouped(input.transactions), deliveries = grouped(input.deliveries);
     const complete = new Map(input.products.map(p => [p.code, seriesFrom(sales.get(p.code) ?? [], cutoff)]));
     const pool = new Map<string, number[][]>();
@@ -297,7 +296,9 @@ export function calculatePlan(dataset: DatasetInput, overrides: Partial<Policy> 
   }
   const rank = { CRITICAL: 0, HIGH: 1, NORMAL: 2 };
   recommendations.sort((a, b) => rank[a.urgency] - rank[b.urgency] || (a.coverDays ?? Infinity) - (b.coverDays ?? Infinity) || a.key.localeCompare(b.key));
-  return { recommendations, policy, cutoffDate: cutoff, warnings: [...new Set(planWarnings)] };
+  // Import diagnostics belong to the dataset. This summary contains only assumptions
+  // actually used by the returned calculation rows; product warnings remain on each row.
+  return { recommendations, policy, cutoffDate: cutoff, warnings: [...new Set(recommendations.flatMap(row => row.provenance.assumptions))] };
 }
 
 /** Public daily-consistent monthly forecast values for scenario charts and rolling-origin evaluation. */

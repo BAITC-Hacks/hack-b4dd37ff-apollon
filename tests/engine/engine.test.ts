@@ -46,6 +46,42 @@ describe("five required behaviors", () => {
   });
 });
 
+describe("active dataset evidence", () => {
+  it("reports only supplied dataset evidence and counterfactuals, without demo checks", () => {
+    const dataset = makeEngineFixture();
+    dataset.synthetic = false;
+    const before = structuredClone(dataset);
+    const checks = runCaseChecks(dataset);
+    expect(checks.length).toBeGreaterThan(0);
+    expect(checks.every(check => check.id.startsWith("dataset-"))).toBe(true);
+    expect(JSON.stringify(checks)).not.toContain("CHECK-001");
+    expect(JSON.stringify(checks)).not.toContain("Синтетика");
+    const sensitivity = checks.find(check => check.id === "dataset-sensitivity")!;
+    expect(sensitivity.passed).toBe(true);
+    expect(sensitivity.values.sku).toBe("SE:SYN-001");
+    expect(sensitivity.values.scopedProducts).toBe(1);
+    expect(Number(sensitivity.values.inboundNeed)).toBeLessThan(Number(sensitivity.values.baseNeed));
+    expect(dataset).toEqual(before);
+  });
+  it("reports lack of evidence on an empty active dataset without falling back to the fixture", () => {
+    const dataset = makeEngineFixture(); dataset.suppliers = []; dataset.synthetic = false;
+    const checks = runCaseChecks(dataset);
+    expect(checks.every(check => check.id.startsWith("dataset-") && !check.passed)).toBe(true);
+    expect(JSON.stringify(checks)).not.toContain("CHECK-001");
+  });
+  it("separates calculation assumptions, import diagnostics and per-product warnings", () => {
+    const dataset = makeEngineFixture();
+    dataset.suppliers[0].issues.push({ severity: "warning", message: "Ошибка исходной ячейки MOQ" });
+    delete dataset.suppliers[0].products[0].moq;
+    const result = calculatePlan(dataset), row = result.recommendations[0];
+    expect(result.warnings).toEqual([...new Set(row.provenance.assumptions)]);
+    expect(result.warnings).not.toContain("Ошибка исходной ячейки MOQ");
+    expect(row.warnings).toContain("MOQ не задан; применяется минимальное техническое значение 1.");
+    expect(dataset.suppliers[0].issues).toHaveLength(1);
+    expect(calculatePlan(dataset, {}, { category: "absent" }).warnings).toEqual([]);
+  });
+});
+
 describe("stock, cutoff, and procurement invariants", () => {
   it("never invents a receipt from a past ETA", () => {
     const data = makeEngineFixture(); data.suppliers[0].currentStock = [{ code: "SYN-001", date: "2026-09-01", available: 30, kind: "opening" }];

@@ -3,11 +3,11 @@
 import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from "react";
 import { ArrowUpRight, Layers3, Sparkles, X } from "lucide-react";
 import type { DatasetSummary } from "@/lib/contracts/api";
-import type { ImportIssue, SourceFile } from "@/lib/contracts/engine";
+import type { ImportIssue, SourceFile, SourceRef } from "@/lib/contracts/engine";
 
 export interface DatasetDetails {
   name: string; synthetic: boolean; cutoffDate: string; files: SourceFile[];
-  suppliers: { supplier: string; productCount: number; transactionCount: number; categories: string[]; issues: ImportIssue[]; seasonality: number[] }[];
+  suppliers: { supplier: string; productCount: number; transactionCount: number; categories: string[]; categoryCoverage?: { specified: number; missing: number }; issues: ImportIssue[]; seasonality: number[] }[];
 }
 interface WorkspaceState {
   datasets: DatasetSummary[]; datasetId: string; dataset?: DatasetSummary; details?: DatasetDetails;
@@ -24,11 +24,33 @@ export async function api<T>(url: string, options?: RequestInit): Promise<T> {
 export const num = (value: number | null | undefined, digits = 0) => value == null || !Number.isFinite(value) ? "—" : new Intl.NumberFormat("ru-RU", { maximumFractionDigits: digits }).format(value);
 export const dateLabel = (value: string) => new Date(value).toLocaleDateString("ru-RU", { day: "numeric", month: "short", year: "numeric", timeZone: "Asia/Almaty" });
 export const supplierLabel = (supplier: string) => supplier === "SE" ? "Systeme Electric" : supplier;
+export const categoryLabel = (category: string | null | undefined) => !category || category === "unknown" ? "Не указана в источнике" : category;
+export function sourceLabel(source?: SourceRef & { cell?: string; workbookId?: string }) {
+  if (!source) return "Источник не указан";
+  return [source.file, source.sheet, source.cell || (source.row ? `строка ${source.row}` : "")].filter(Boolean).join(" · ");
+}
+type DisplayIssue = Omit<ImportIssue, "supplier"> & { supplier?: string };
+export function ImportIssueList({ issues }: { issues: DisplayIssue[] }) {
+  const groups = new Map<string, DisplayIssue[]>();
+  for (const issue of issues) {
+    const key = `${issue.supplier || ""}|${issue.severity}|${issue.message}`;
+    const group = groups.get(key);
+    if (group) group.push(issue); else groups.set(key, [issue]);
+  }
+  return <>{[...groups.entries()].map(([key, group]) => <details key={key} className="advanced-policy">
+    <summary>{group[0].supplier ? `${supplierLabel(group[0].supplier)}: ` : ""}{group[0].message}{group.length > 1 ? ` · ${num(group.length)} замечаний` : ""}</summary>
+    {group.map((issue, index) => <p key={index} className="chart-caption">{issue.code ? `${issue.code} · ` : ""}{sourceLabel(issue.source)}</p>)}
+  </details>)}</>;
+}
+function activeDatasetId(datasets: DatasetSummary[], preferred?: string | null) {
+  const actual = datasets.filter(dataset => !dataset.synthetic);
+  return actual.find(dataset => dataset.id === preferred)?.id || actual.toSorted((a, b) => b.createdAt.localeCompare(a.createdAt))[0]?.id || "";
+}
 export function ErrorNotice({ error }: { error?: string }) { return error ? <div className="notice danger" role="alert">{error}</div> : null; }
 export function PageHeading({ eyebrow, title, description, children }: { eyebrow: string; title: string; description: string; children?: ReactNode }) {
   return <div className="page-heading"><div><div className="eyebrow">{eyebrow}</div><h1>{title}</h1><p>{description}</p></div><div className="heading-actions">{children}</div></div>;
 }
-export function EmptyState({ title = "Начнём с данных", description = "Загрузите отчёты поставщиков или откройте демонстрационный набор, чтобы рассчитать потребность." }: { title?: string; description?: string }) {
+export function EmptyState({ title = "Начнём с данных", description = "Выберите сохранённые данные кейса или загрузите отчёты поставщиков, чтобы рассчитать потребность." }: { title?: string; description?: string }) {
   return <div className="empty-state"><div className="empty-icon"><Layers3 size={30}/></div><h2>{title}</h2><p>{description}</p></div>;
 }
 export function LoadingState({ text = "Загружаем данные…" }: { text?: string }) { return <div className="loading-state" role="status"><span className="spinner"/>{text}</div>; }
@@ -48,7 +70,7 @@ export function Workspace({ children }: { children: ReactNode }) {
       const result = await api<{ datasets: DatasetSummary[] }>("/api/datasets");
       setDatasets(result.datasets);
       const preferred = selectedId ?? localStorage.getItem("apollon.dataset");
-      selectDataset(result.datasets.find(d => d.id === preferred)?.id || "");
+      selectDataset(activeDatasetId(result.datasets, preferred));
     } catch (e) { setError(e instanceof Error ? e.message : "Не удалось загрузить наборы"); }
     finally { setLoading(false); }
   }, [selectDataset]);
@@ -58,7 +80,7 @@ export function Workspace({ children }: { children: ReactNode }) {
       .then(result => {
         setDatasets(result.datasets);
         const preferred = localStorage.getItem("apollon.dataset");
-        selectDataset(result.datasets.find(d => d.id === preferred)?.id || "");
+        selectDataset(activeDatasetId(result.datasets, preferred));
       })
       .catch(e => { if (!controller.signal.aborted) setError(e instanceof Error ? e.message : "Не удалось загрузить наборы"); })
       .finally(() => { if (!controller.signal.aborted) setLoading(false); });
