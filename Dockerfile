@@ -7,6 +7,13 @@ FROM dependencies AS build
 COPY . .
 ENV NEXT_TELEMETRY_DISABLED=1
 RUN npm run build
+# Drop dev-only tooling that next build already consumed and that the
+# Railway pre-deploy step (prisma migrate deploy + seed:demo via tsx) does
+# not need, so it isn't shipped into the runtime image alongside prisma/tsx.
+RUN rm -rf node_modules/eslint node_modules/eslint-config-next node_modules/@eslint \
+    node_modules/playwright node_modules/@playwright \
+    node_modules/vitest node_modules/@vitest \
+    node_modules/tailwindcss node_modules/@tailwindcss
 
 FROM node:24-alpine AS runtime
 WORKDIR /app

@@ -3,6 +3,21 @@ on: [push, pull_request]
 jobs:
   check:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: apollon
+          POSTGRES_PASSWORD: apollon
+          POSTGRES_DB: apollon
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U apollon -d apollon"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      DATABASE_URL: postgresql://apollon:apollon@localhost:5432/apollon
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -11,5 +26,6 @@ jobs:
       - run: npm run db:generate
       - run: npm run typecheck
       - run: npm run lint
+      - run: npm run db:migrate
       - run: npm test
       - run: npm run build
