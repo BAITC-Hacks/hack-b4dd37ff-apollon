@@ -3,7 +3,7 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { ArrowUpRight, Sparkles, X } from "lucide-react";
 import type { DatasetSummary } from "@/lib/contracts/api";
-import type { ImportIssue, SourceFile, SourceRef } from "@/lib/contracts/engine";
+import type { ImportIssue, Recommendation, SourceFile, SourceRef } from "@/lib/contracts/engine";
 
 export interface DatasetDetails {
   name: string; synthetic: boolean; cutoffDate: string; files: SourceFile[];
@@ -90,7 +90,25 @@ function chatContent(message: string): ReactNode[] {
   return content;
 }
 
-export function Copilot({ runId }: { runId?: string }) {
+function suggestedQuestions(recommendations: Recommendation[]): string[] {
+  const firstTen = recommendations.slice(0, 10);
+  const first = firstTen.find(row => row.quantity > 0) ?? firstTen[0];
+  if (!first) return [];
+  const review = firstTen.find(row => row.needsReview || row.warnings.length > 0 || row.confidence === "low")
+    ?? firstTen.find(row => row.key !== first.key) ?? first;
+  const anomaly = firstTen.find(row => row.anomalies.length > 0);
+  const third = anomaly ?? firstTen.find(row => row.key !== first.key && row.key !== review.key)
+    ?? firstTen.find(row => row.key !== review.key) ?? first;
+  const sku = (row: Recommendation) => `${row.supplier} ${row.code}`;
+  return [
+    first.quantity > 0 ? `Почему рекомендуется заказать ${sku(first)}?` : `Как рассчитана рекомендация для ${sku(first)}?`,
+    review.needsReview || review.warnings.length > 0 || review.confidence === "low"
+      ? `Что проверить перед заказом ${sku(review)}?` : `Насколько надёжен расчёт по ${sku(review)}?`,
+    anomaly ? `Какие аномалии обнаружены у ${sku(third)}?` : `Как учтены остаток и поставки по ${sku(third)}?`,
+  ];
+}
+
+export function Copilot({ runId, recommendations = [] }: { runId?: string; recommendations?: Recommendation[] }) {
   const { datasetId } = useWorkspace();
   const launcherRef = useRef<HTMLButtonElement>(null);
   const questionRef = useRef<HTMLTextAreaElement>(null);
@@ -101,9 +119,10 @@ export function Copilot({ runId }: { runId?: string }) {
   useEffect(() => { api<{ copilotConfigured: boolean }>("/api/health").then(r => setConfigured(r.copilotConfigured)).catch(() => setConfigured(false)); }, []);
   useEffect(() => { if (open) (questionRef.current?.disabled ? closeRef.current : questionRef.current)?.focus(); }, [open, configured]);
   function closePanel() { setOpen(false); requestAnimationFrame(() => launcherRef.current?.focus()); }
-  async function send() {
-    if (!input.trim() || busy || !datasetId) return;
-    const message = input.trim(); setInput(""); setError(""); setBusy(true); setMessages(m => [...m, { role: "user", text: message }, { role: "assistant", text: "" }]);
+  async function send(suggestion?: string) {
+    const message = (suggestion ?? input).trim();
+    if (!message || busy || !datasetId || !configured) return;
+    setInput(""); setError(""); setBusy(true); setMessages(m => [...m, { role: "user", text: message }, { role: "assistant", text: "" }]);
     try {
       const response = await fetch("/api/agent", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ message, datasetId, runId }) });
       if (!response.ok) { const result = await response.json(); throw new Error(result.error || "Ассистент недоступен"); }
@@ -114,5 +133,28 @@ export function Copilot({ runId }: { runId?: string }) {
     finally { setBusy(false); }
   }
   if (!datasetId) return null;
-  return <>{!open && <button ref={launcherRef} type="button" className="copilot-launcher" onClick={() => setOpen(true)}><Sparkles size={18} aria-hidden="true"/>{configured ? "Что заказать? Спросите Copilot" : "Помощник по закупкам"}</button>}{open && <section id="copilot-panel" className="copilot-panel" aria-label="Помощник по закупкам" onKeyDown={e => { if (e.key === "Escape") { e.preventDefault(); closePanel(); } }}><header><div><Sparkles size={20} aria-hidden="true"/><strong>Apollon Copilot</strong></div><button ref={closeRef} type="button" className="icon-button" aria-label="Закрыть помощника" onClick={closePanel}><X size={19} aria-hidden="true"/></button></header><div className="copilot-body" role="log" aria-live="polite" aria-relevant="additions text"><div className="copilot-intro">Помогу разобрать расчёт, проверить аномалии и сравнить сценарии. Утверждение заказа остаётся за вами.</div>{configured === false && <div className="notice">Ассистент не подключён. Для его работы требуется серверный OPENAI_API_KEY. Расчёты и утверждение доступны без ключа.</div>}{messages.map((m, i) => <div className={`chat-message ${m.role}`} key={i}><small>{m.role === "user" ? "Вы" : "Apollon"}</small><p>{m.text ? chatContent(m.text) : (busy ? "Анализирую данные…" : "Ответ не получен")}</p></div>)}<ErrorNotice error={error}/></div><form onSubmit={e => { e.preventDefault(); void send(); }}><label className="sr-only" htmlFor="copilot-question">Вопрос ассистенту</label><textarea ref={questionRef} id="copilot-question" name="question" autoComplete="off" placeholder="Например, почему этой позиции нужен заказ?" value={input} onChange={e => setInput(e.target.value)} onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); e.currentTarget.form?.requestSubmit(); } }} disabled={!configured || busy || !datasetId}/><div className="copilot-form-footer"><span>Enter — отправить · Shift+Enter — новая строка</span><button type="submit" className="button primary" disabled={!configured || busy || !input.trim() || !datasetId}>{busy ? "Анализ…" : "Отправить"}<ArrowUpRight size={15} aria-hidden="true"/></button></div></form></section>}</>;
+  const questions = suggestedQuestions(recommendations);
+  return <>
+    {!open && <button ref={launcherRef} type="button" className="copilot-launcher" onClick={() => setOpen(true)}>
+      <Sparkles size={18} aria-hidden="true"/>{configured ? "Что заказать? Спросите Ассистента" : "Ассистент"}
+    </button>}
+    {open && <section id="copilot-panel" className="copilot-panel" aria-label="Ассистент" onKeyDown={e => { if (e.key === "Escape") { e.preventDefault(); closePanel(); } }}>
+      <header><div><Sparkles size={20} aria-hidden="true"/><strong>Ассистент</strong></div><button ref={closeRef} type="button" className="icon-button" aria-label="Закрыть ассистента" onClick={closePanel}><X size={19} aria-hidden="true"/></button></header>
+      <div className="copilot-body" role="log" aria-live="polite" aria-relevant="additions text">
+        <div className="copilot-intro">Помогу разобрать расчёт, проверить аномалии и сравнить сценарии. Утверждение заказа остаётся за вами.</div>
+        {configured === false && <div className="notice">Ассистент не подключён. Для его работы требуется серверный OPENAI_API_KEY. Расчёты и утверждение доступны без ключа.</div>}
+        {configured && messages.length === 0 && questions.length > 0 && <div className="copilot-suggestions" aria-label="Примеры вопросов по текущему расчёту">
+          <span>Попробуйте спросить</span>
+          {questions.map(question => <button key={question} type="button" disabled={busy} onClick={() => void send(question)}>{question}</button>)}
+        </div>}
+        {messages.map((m, i) => <div className={`chat-message ${m.role}`} key={i}><small>{m.role === "user" ? "Вы" : "Ассистент"}</small><p>{m.text ? chatContent(m.text) : (busy ? "Анализирую данные…" : "Ответ не получен")}</p></div>)}
+        <ErrorNotice error={error}/>
+      </div>
+      <form onSubmit={e => { e.preventDefault(); void send(); }}>
+        <label className="sr-only" htmlFor="copilot-question">Вопрос ассистенту</label>
+        <textarea ref={questionRef} id="copilot-question" name="question" autoComplete="off" placeholder="Например, почему этой позиции нужен заказ?" value={input} onChange={e => setInput(e.target.value)} onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); e.currentTarget.form?.requestSubmit(); } }} disabled={!configured || busy || !datasetId}/>
+        <div className="copilot-form-footer"><span>Enter — отправить · Shift+Enter — новая строка</span><button type="submit" className="button primary" disabled={!configured || busy || !input.trim() || !datasetId}>{busy ? "Анализ…" : "Отправить"}<ArrowUpRight size={15} aria-hidden="true"/></button></div>
+      </form>
+    </section>}
+  </>;
 }

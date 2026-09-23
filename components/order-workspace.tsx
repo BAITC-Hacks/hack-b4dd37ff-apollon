@@ -463,7 +463,7 @@ export function OrderWorkspace({ initialRoute, initialSku }: { initialRoute: Rou
       </>}
     </>}
 
-    <Copilot runId={run?.id}/>
+    <Copilot runId={run?.id} recommendations={run?.result.recommendations}/>
 
     {/* Sticky bottom bar: §9 */}
     {run && run.orders.length > 0 && <div className="sticky-bar">

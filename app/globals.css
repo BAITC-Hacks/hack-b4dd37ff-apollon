@@ -248,6 +248,10 @@ tbody tr:hover{background:var(--subtle)}
 .copilot-panel header svg{color:var(--ai)}
 .copilot-body{padding:16px;flex:1;overflow:auto;overscroll-behavior:contain}
 .copilot-intro{font-size:14px;line-height:1.6;color:var(--muted);margin-bottom:16px}
+.copilot-suggestions{display:grid;gap:8px;margin-bottom:16px}
+.copilot-suggestions>span{font-size:12px;font-weight:600;color:var(--muted)}
+.copilot-suggestions button{width:100%;min-height:40px;padding:9px 12px;text-align:left;font-size:13px;line-height:1.35;overflow-wrap:anywhere;color:var(--ink);background:var(--subtle);border:1px solid var(--line-strong);border-radius:var(--radius-sm);transition:background-color .15s,border-color .15s}
+.copilot-suggestions button:hover:not(:disabled){background:var(--teal-light);border-color:#9ec5fe}
 .copilot-panel form{padding:12px;border-top:1px solid var(--line)}
 .copilot-panel textarea{width:100%;resize:vertical;font-size:14px;min-height:72px}
 .copilot-form-footer{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:8px}
