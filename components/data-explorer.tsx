@@ -36,7 +36,7 @@ function usePagedData<T>(endpoint: string, datasetId: string, supplier: string, 
 
 function Pager({ page, pageSize, total, onChange }: { page: number; pageSize: number; total: number; onChange: (p: number) => void }) {
   const pageCount = Math.max(1, Math.ceil(total / pageSize));
-  return <div className="pagination-bar"><span className="muted" style={{ fontSize: 10 }}>{total ? `${page * pageSize + 1}–${Math.min((page + 1) * pageSize, total)} из ${num(total)}` : "Нет строк"}</span><button className="icon-button" aria-label="Предыдущая страница" disabled={page === 0} onClick={() => onChange(page - 1)}><ChevronLeft size={14} /></button><span style={{ fontSize: 10 }}>{page + 1} / {pageCount}</span><button className="icon-button" aria-label="Следующая страница" disabled={page >= pageCount - 1} onClick={() => onChange(page + 1)}><ChevronRight size={14} /></button></div>;
+  return <div className="pagination-bar"><span className="muted" style={{ fontSize: 13 }}>{total ? `${page * pageSize + 1}–${Math.min((page + 1) * pageSize, total)} из ${num(total)}` : "Нет строк"}</span><button className="icon-button" aria-label="Предыдущая страница" disabled={page === 0} onClick={() => onChange(page - 1)}><ChevronLeft size={14} /></button><span style={{ fontSize: 13 }}>{page + 1} / {pageCount}</span><button className="icon-button" aria-label="Следующая страница" disabled={page >= pageCount - 1} onClick={() => onChange(page + 1)}><ChevronRight size={14} /></button></div>;
 }
 
 export function DataExplorer() {

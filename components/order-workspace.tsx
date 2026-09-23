@@ -42,7 +42,7 @@ export function OrderWorkspace() {
   const [files, setFiles] = useState<File[]>([]);
   const [uploadName, setUploadName] = useState("");
   const [uploadSupplier, setUploadSupplier] = useState("");
-  const [sourceBusy, setSourceBusy] = useState<"" | "upload" | "demo">("");
+  const [sourceBusy, setSourceBusy] = useState<"" | "upload" | "refresh">("");
   const [sourceError, setSourceError] = useState("");
 
   // ---- Calculation scope / policy ----
@@ -121,17 +121,19 @@ export function OrderWorkspace() {
 
   function updatePolicy<K extends keyof Policy>(key: K, value: Policy[K]) { setPolicy(p => ({ ...p, [key]: value })); }
 
-  async function importData(demo: boolean) {
-    setSourceBusy(demo ? "demo" : "upload"); setSourceError(""); setSuccess("");
+  async function refreshData() {
+    setSourceBusy("refresh"); setSourceError("");
+    try { await refresh(); }
+    catch (e) { setSourceError(e instanceof Error ? e.message : "Не удалось обновить список данных"); }
+    finally { setSourceBusy(""); }
+  }
+
+  async function importData() {
+    setSourceBusy("upload"); setSourceError(""); setSuccess("");
     try {
-      let body: string | FormData;
-      if (demo) body = JSON.stringify({ source: "demo" });
-      else {
-        const form = new FormData(); files.forEach(file => form.append("files", file));
-        if (uploadName.trim()) form.append("name", uploadName.trim());
-        if (uploadSupplier) form.append("supplier", uploadSupplier);
-        body = form;
-      }
+      const body = new FormData(); files.forEach(file => body.append("files", file));
+      if (uploadName.trim()) body.append("name", uploadName.trim());
+      if (uploadSupplier) body.append("supplier", uploadSupplier);
       const result = await api<{ dataset: DatasetSummary }>("/api/import", { method: "POST", body });
       await refresh(result.dataset.id);
       setFiles([]); setUploadName(""); setUploadSupplier("");
@@ -275,10 +277,10 @@ export function OrderWorkspace() {
             <label className="field"><span>Название набора</span><input value={uploadName} onChange={e => setUploadName(e.target.value)} placeholder="Например, отчёты за сентябрь"/></label>
             <label className="field"><span>Поставщик</span><select value={uploadSupplier} onChange={e => setUploadSupplier(e.target.value)}><option value="">Определить автоматически</option><option value="IEK">IEK</option><option value="SE">Systeme Electric</option></select></label>
           </div>
-          <button className="button primary" disabled={!files.length || !!sourceBusy} onClick={() => void importData(false)}>{sourceBusy === "upload" ? <span className="spinner"/> : <FolderUp size={15}/>} {sourceBusy === "upload" ? "Импортируем и проверяем…" : "Загрузить отчёты"}</button>
+          <button className="button primary" disabled={!files.length || !!sourceBusy} onClick={() => void importData()}>{sourceBusy === "upload" ? <span className="spinner"/> : <FolderUp size={15}/>} {sourceBusy === "upload" ? "Импортируем и проверяем…" : "Загрузить отчёты"}</button>
           <ErrorNotice error={sourceError}/>
           <details className="advanced-policy"><summary className="subtle-summary">Какие файлы нужны и где взять примеры <ChevronDown size={12} style={{ display: "inline" }}/></summary>
-            <ul style={{ margin: "8px 0 0", paddingLeft: 18, fontSize: 11, color: "var(--muted)", lineHeight: 1.9 }}>{REQUIRED_REPORTS.map(r => <li key={r}>{r}</li>)}</ul>
+            <ul style={{ margin: "8px 0 0", paddingLeft: 18, fontSize: 14, color: "var(--muted)", lineHeight: 1.9 }}>{REQUIRED_REPORTS.map(r => <li key={r}>{r}</li>)}</ul>
             <p className="chart-caption">Примеры файлов IEK и Systeme Electric лежат в каталоге <code>sample-data/</code> репозитория (см. sample-data/README.md) — их можно загрузить сюда напрямую.</p>
           </details>
         </div></section>
@@ -286,8 +288,8 @@ export function OrderWorkspace() {
           <div className="demo-symbol"><FlaskConical size={26}/></div>
           <div className="eyebrow">Можно начать без своих файлов</div>
           <h2>Использовать данные кейса</h2>
-          <p>Подготовленные наборы IEK и Systeme Electric. Тот же импорт и тот же расчёт, что и для собственных файлов.</p>
-          {datasetsLoading ? <LoadingState text="Загружаем список наборов…"/> : datasets.length === 0 ? <p className="chart-caption">Подготовленных наборов пока нет — загрузите демо-данные ниже или свои отчёты слева.</p> : <div className="dataset-list">
+          <p>Сохранённые в базе наборы данных, подготовленные для расчёта.</p>
+          {datasetsLoading ? <LoadingState text="Загружаем список наборов…"/> : datasets.length === 0 ? <p className="chart-caption">Наборов для расчёта пока нет. Сохранённые исходные книги требуют отдельного сопоставления полей перед расчётом.</p> : <div className="dataset-list">
             {datasets.map(d => <div className="dataset-list-row" key={d.id}>
               <div><strong>{d.name}</strong><span className={`badge ${d.synthetic ? "demo" : "teal"}`} style={{ marginLeft: 8 }}>{d.synthetic ? "Демо-данные" : "Данные кейса"}</span>
                 <div className="dataset-suppliers">{[...new Set(d.files.map(f => f.supplier).filter(Boolean))].map(s => <SupplierLogo key={s} supplier={String(s)} size="sm"/>)}</div>
@@ -296,7 +298,7 @@ export function OrderWorkspace() {
               <button className="button small" onClick={() => selectDataset(d.id)}>Использовать <ArrowRight size={12}/></button>
             </div>)}
           </div>}
-          <button className="button dark" disabled={!!sourceBusy} onClick={() => void importData(true)} style={{ marginTop: 14 }}>{sourceBusy === "demo" ? <span className="spinner"/> : <Database size={15}/>} {sourceBusy === "demo" ? "Готовим демонстрацию…" : "Загрузить демо-данные"}<ArrowRight size={14}/></button>
+          <button className="button dark" disabled={!!sourceBusy} onClick={() => void refreshData()} style={{ marginTop: 14 }}>{sourceBusy === "refresh" ? <span className="spinner"/> : <Database size={15}/>} {sourceBusy === "refresh" ? "Обновляем список…" : "Обновить список данных"}<ArrowRight size={14}/></button>
         </div></section>
       </div>
     </> : null}
@@ -377,13 +379,13 @@ export function OrderWorkspace() {
           </details>; })()}
           <section className="card">
             <header className="card-header"><div><h2>Рекомендации к заказу <span className="badge" style={{ marginLeft: 8 }}>{num(filtered.length)}</span></h2><p>«Рекомендовано» — расчёт Apollon. «Количество к заказу» можно изменить; изменение снимает утверждение.</p></div>
-              <div className="inline-controls"><label className="sr-only" htmlFor="run-select">Сохранённый расчёт</label><select id="run-select" value={run.id} onChange={e => void openRun(e.target.value)} style={{ fontSize: 10, maxWidth: 230 }} disabled={runLoading}>{runs.map(r => <option key={r.id} value={r.id}>{dateLabel(r.createdAt)} · {new Date(r.createdAt).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" })}{r.baseRunId ? " · сценарий" : ""}</option>)}</select></div>
+              <div className="inline-controls"><label className="sr-only" htmlFor="run-select">Сохранённый расчёт</label><select id="run-select" value={run.id} onChange={e => void openRun(e.target.value)} style={{ fontSize: 13, maxWidth: 230 }} disabled={runLoading}>{runs.map(r => <option key={r.id} value={r.id}>{dateLabel(r.createdAt)} · {new Date(r.createdAt).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" })}{r.baseRunId ? " · сценарий" : ""}</option>)}</select></div>
             </header>
             <div className="filters">
               <div className="search-field"><Search size={15}/><input aria-label="Поиск по товарам (не влияет на расчёт)" placeholder="Название, артикул или код — фильтр отображения…" value={query} onChange={e => { setQuery(e.target.value); setPage(0); }}/></div>
               <select aria-label="Фильтр срочности" value={urgency} onChange={e => { setUrgency(e.target.value); setPage(0); }}><option value="">Любая срочность</option><option value="CRITICAL">Критично</option><option value="HIGH">Высокий приоритет</option><option value="NORMAL">Планово</option></select>
               <label className="checkbox-label"><input type="checkbox" checked={reviewOnly} onChange={e => { setReviewOnly(e.target.checked); setPage(0); }}/> Требуют проверки</label>
-              <span className="filter-spacer"/><span className="muted" style={{ fontSize: 10 }}>{selected.length ? `Выбрано: ${selected.length}` : "Группировка по поставщику"}</span>
+              <span className="filter-spacer"/><span className="muted" style={{ fontSize: 13 }}>{selected.length ? `Выбрано: ${selected.length}` : "Группировка по поставщику"}</span>
             </div>
             <div className="table-scroll"><table><thead><tr>
               <th><input type="checkbox" aria-label="Выбрать все позиции на странице" checked={visible.length > 0 && visible.every(r => selected.includes(r.key))} onChange={e => setSelected(current => e.target.checked ? [...new Set([...current, ...visible.map(r => r.key)])] : current.filter(k => !visible.some(r => r.key === k)))}/></th>
@@ -401,7 +403,7 @@ export function OrderWorkspace() {
               return <SupplierRows key={s} supplier={s} count={supplierRows.length} unitTotals={unitTotals} costTotal={hasCost ? costTotal : null} costMissing={costMissing} order={order} dirty={!!dirty} busy={!!rowBusy} onSave={() => order && void saveEdits(order)} onApprove={() => { if (order) { setApproval({ order, keys: selectedKeys.length ? selectedKeys : undefined }); setAcknowledged(false); setError(""); } }} onAudit={() => order && void showAudit(order)} onDownload={format => order && void download(order, format)} selectedCount={selectedKeys.length}>
                 {rows.map(r => <tr key={r.key}>
                   <td><input type="checkbox" aria-label={`Выбрать ${r.code}`} checked={selected.includes(r.key)} onChange={() => toggleKey(r.key)}/></td>
-                  <td><button className="product-name table-heading-button" style={{ display: "block", textAlign: "left" }} onClick={() => setDrawerKey(r.key)}>{r.name}</button><span className="product-code">{r.supplierArticle || r.code} · {r.unit} <span className="badge" style={{ fontSize: 8, padding: "1px 4px", marginLeft: 4 }}>{r.abc}{r.xyz}</span>{r.needsReview && <span title="Требует проверки" style={{ color: "#b38f4d", marginLeft: 5 }}>●</span>}</span></td>
+                  <td><button className="product-name table-heading-button" style={{ display: "block", textAlign: "left" }} onClick={() => setDrawerKey(r.key)}>{r.name}</button><span className="product-code">{r.supplierArticle || r.code} · {r.unit} <span className="badge" style={{ fontSize: 12, padding: "1px 4px", marginLeft: 4 }}>{r.abc}{r.xyz}</span>{r.needsReview && <span title="Требует проверки" style={{ color: "#b38f4d", marginLeft: 5 }}>●</span>}</span></td>
                   <td className="number">{r.provenance.stockKind === "current" ? num(r.provenance.availableStock, 1) : r.provenance.stockKind === "unknown" ? "нет данных" : <>{num(r.provenance.availableStock, 1)}<span className="product-code">оценка</span></>}</td>
                   <td className="number">{num(r.provenance.eligibleInbound, 1)}</td>
                   <td className="number">{r.coverDays == null ? "нет данных" : num(r.coverDays, 1)}</td>
@@ -412,7 +414,7 @@ export function OrderWorkspace() {
                   <td><button className="icon-button" aria-label={`Обоснование ${r.code}`} onClick={() => setDrawerKey(r.key)}><ArrowRight size={14}/></button></td>
                 </tr>)}
               </SupplierRows>; })}
-              {visible.length === 0 && <tr><td colSpan={10} style={{ textAlign: "center", padding: 35, color: "#86938b" }}>Нет позиций по выбранным условиям отображения</td></tr>}
+              {visible.length === 0 && <tr><td colSpan={10} style={{ textAlign: "center", padding: 35, color: "var(--muted)" }}>Нет позиций по выбранным условиям отображения</td></tr>}
             </tbody></table></div>
             <footer className="card-footer"><span>{filtered.length ? `${activePage * pageSize + 1}–${Math.min((activePage + 1) * pageSize, filtered.length)}` : "0"} из {num(filtered.length)} позиций · {hasEdits ? <span className="save-hint">Есть несохранённые изменения</span> : "Данные расчёта сохранены"}</span><div className="pager"><button aria-label="Предыдущая страница" disabled={activePage === 0} onClick={() => setPage(p => p - 1)}><ChevronLeft size={13}/></button><span>{activePage + 1} / {pageCount}</span><button aria-label="Следующая страница" disabled={activePage >= pageCount - 1} onClick={() => setPage(p => p + 1)}><ChevronRight size={13}/></button></div></footer>
           </section>
@@ -453,7 +455,7 @@ export function OrderWorkspace() {
       <ErrorNotice error={historyError}/>
       {!history ? <LoadingState text="Загружаем историю…"/> : history.length === 0 ? <p>Расчётов пока нет.</p> : <div className="history-list">{history.map(h => <button key={h.id} className="history-row" onClick={() => openHistoryEntry(h)}>
         <div><strong>{dateLabel(h.createdAt)}</strong> <span className="product-code">{new Date(h.createdAt).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" })}</span></div>
-        <div className="product-code">{h.datasetName} · <span className={`badge ${h.synthetic ? "demo" : "teal"}`} style={{ fontSize: 8 }}>{h.synthetic ? "Демо" : "Кейс"}</span> · {h.scope?.supplier ? supplierLabel(h.scope.supplier) : "все поставщики"}{h.scope?.category ? ` · ${h.scope.category}` : ""}</div>
+        <div className="product-code">{h.datasetName} · <span className={`badge ${h.synthetic ? "demo" : "teal"}`} style={{ fontSize: 12 }}>{h.synthetic ? "Демо" : "Кейс"}</span> · {h.scope?.supplier ? supplierLabel(h.scope.supplier) : "все поставщики"}{h.scope?.category ? ` · ${h.scope.category}` : ""}</div>
         <div className="history-orders">{h.orders.map(o => <span key={o.supplier} className={`badge ${o.status}`}>{supplierLabel(o.supplier)}: {o.status === "APPROVED" ? `утверждён v${o.revision}` : "черновик"}</span>)}</div>
       </button>)}</div>}
     </div></section></div>}
@@ -485,7 +487,7 @@ function QuantityCell({ rec, value, edited, approved, onChange, onReset }: { rec
   return <td>
     <input type="number" min={0} step="any" name={`quantity-${rec.key}`} aria-label={`Количество к заказу ${rec.code}`} className={`quantity-input ${edited ? "edited" : ""}`} value={value} onChange={e => onChange(e.target.value)}/>
     <span className="unit-label">{rec.unit}</span>
-    {approved && <Check size={12} color="#4f9272" style={{ display: "inline", marginLeft: 4 }}/>}
+    {approved && <Check size={12} color="var(--ok)" style={{ display: "inline", marginLeft: 4 }}/>}
     {edited && <div className="product-code">Изменено вручную · <button className="table-heading-button" style={{ display: "inline-flex", color: "var(--teal)", fontWeight: 600 }} onClick={onReset}>Сбросить к рекомендации</button></div>}
     {misaligned && <div className="product-code">Кратность {num(multiple)} — ближайшее: <button className="table-heading-button" style={{ display: "inline-flex", color: "var(--teal)", fontWeight: 600 }} onClick={() => onChange(String(lower || multiple))}>{num(lower || multiple)}</button> или <button className="table-heading-button" style={{ display: "inline-flex", color: "var(--teal)", fontWeight: 600 }} onClick={() => onChange(String(upper))}>{num(upper)}</button></div>}
   </td>;
