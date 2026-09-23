@@ -1,4 +1,4 @@
-import { readDirectory, parseWorkbooks, PARSER_VERSION } from "@/lib/ingest";
+import { parseWorkbooks, PARSER_VERSION } from "@/lib/ingest";
 import { saveDataset, withJob, AppError } from "@/lib/repo";
 import { apiError, rejectCrossOrigin, readCappedBody, rateLimit } from "@/lib/http";
 import type { Supplier } from "@/lib/contracts/engine";
@@ -12,13 +12,9 @@ export async function POST(request:Request){try{
   // and chunked-encoded requests can omit it entirely, so it cannot be trusted to bound request.formData()'s
   // internal buffering. Multipart is then re-parsed from the already-capped buffer.
   const contentType=request.headers.get("content-type")??"";
+  if(contentType.includes("application/json"))throw new AppError("Импорт встроенных данных удалён. Используйте сохранённые наборы из базы данных.",410);
   const body=await readCappedBody(request,MAX_UPLOAD_BYTES);
   const dataset=await withJob("IMPORT",async()=>{
-    if(contentType.includes("application/json")){
-      const json=body.length?JSON.parse(body.toString("utf-8")):{};
-      if(json.source!=="demo")throw new AppError("Choose demo or upload workbooks");
-      return saveDataset(await readDirectory(process.env.DEMO_DATA_DIR??"sample-data",{name:"Apollon · демонстрационные данные",synthetic:true,cutoffDate:"2026-09-22"}),PARSER_VERSION);
-    }
     const form=await new Response(new Uint8Array(body),{headers:{"content-type":contentType}}).formData();
     const uploaded=form.getAll("files").filter((f):f is File=>f instanceof File);
     if(!uploaded.length||uploaded.length>24)throw new AppError("Upload between 1 and 24 Excel workbooks");

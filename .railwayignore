@@ -16,6 +16,7 @@ playwright-report
 .cache
 coverage
 artifacts
+sample-data
 *.tsbuildinfo
 *.pem
 *.key

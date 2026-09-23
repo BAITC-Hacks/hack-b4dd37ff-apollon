@@ -8,8 +8,7 @@ COPY . .
 ENV NEXT_TELEMETRY_DISABLED=1
 RUN npm run build
 # Drop dev-only tooling that next build already consumed and that the
-# Railway pre-deploy step (prisma migrate deploy + seed:demo via tsx) does
-# not need, so it isn't shipped into the runtime image alongside prisma/tsx.
+# Railway pre-deploy migration does not need.
 RUN rm -rf node_modules/eslint node_modules/eslint-config-next node_modules/@eslint \
     node_modules/playwright node_modules/@playwright \
     node_modules/vitest node_modules/@vitest \
@@ -27,8 +26,6 @@ COPY --from=build --chown=app:app /app/generated ./generated
 COPY --from=build --chown=app:app /app/prisma ./prisma
 COPY --from=build --chown=app:app /app/prisma.config.ts /app/tsconfig.json /app/package.json ./
 COPY --from=build --chown=app:app /app/lib ./lib
-COPY --from=build --chown=app:app /app/scripts ./scripts
-COPY --from=build --chown=app:app /app/sample-data ./sample-data
 USER app
 EXPOSE 3000
 CMD ["node", "server.js"]

@@ -4,6 +4,8 @@ Updated 2026-09-23. This is the single implementation plan, incorporating the or
 
 ## 0. Stack and settled architecture
 
+**Latest source-data decision (2026-09-23, supersedes conflicting import/local-database instructions below):** use only existing Railway production PostgreSQL. Import all IEK and Systeme Electric workbooks 1:1, retaining original bytes and every source row/cell, types, formulas, cached values/errors, whitespace and duplicates. No source filtering, deduplication, correction or inferred values. Workbook-specific analysis can run in parallel; one executor owns schema and production writes, with one file per atomic import. The user subsequently authorized all six supplier files concurrently. Earlier semantic audit statements are hypotheses for a later interpretation layer, not authority to modify raw facts. Raw source tables remain separate from public planning datasets. See `docs/source-import.md`; no local database is needed or authorized.
+
 Verify current primary documentation and actual package compatibility at installation, then pin tested versions with a lockfile. Version observations below come from prior planning and require verification before installation. Use latest stable Next.js with its compatible React peer versions. One root dependency owner performs installs.
 
 | Piece | Version | Notes |
@@ -15,7 +17,7 @@ Verify current primary documentation and actual package compatibility at install
 | exceljs | 4.4.x | Do **not** use `xlsx` from npm (stale 0.18.5, known CVEs). |
 | UI | Tailwind 4 + shadcn/ui, @tanstack/react-table, recharts | |
 | Tests | vitest (engine/ingest), Playwright smoke (1 e2e) | |
-| DB | Postgres 16 (Railway plugin in prod, `docker compose` locally) | Use the same provider everywhere; don't switch to SQLite. |
+| DB | Existing Railway production PostgreSQL (observed server 18.6) | No local PostgreSQL or SQLite. |
 
 ## 1. Data interpretation and required corrections
 
@@ -153,23 +155,14 @@ The UI is one workspace at `/` (`components/order-workspace.tsx`, mounted by `ap
 
 ## 7. Reproducibility and Railway
 
-- `docker compose up` starts postgres and the app, with one designated local initialization step for migrations and idempotent demo seeding, then serves on :3000. Do not repeat Railway's pre-deploy migration from the production web entrypoint. `npm run import -- --dir "case and data"` imports real files locally.
-- Without Docker for the app: `npm ci`, start the Compose database, run migrations and `npm run seed:demo`, then `npm run dev`; partner import is an additional optional command. Document exact final commands in README.
-- `npm test` runs the vitest engine tests (the must-haves) and needs neither a DB nor a key.
-- **Data (user decision, 2026-09-23):** real partner workbooks stay in the git-ignored `case and data/`. They're used locally by the team and can be uploaded by judges who have them. A clean clone runs on the **demo dataset**:
-  - `scripts/make-demo-data.ts` (seeded RNG, deterministic) writes synthetic workbooks in the **exact partner layouts** (same sheets, header rows, Russian column names, `Итого` rows, blanks-as-zero) to `sample-data/`, which is committed.
-  - "Load demo dataset" and the deploy seed parse those files **through `lib/ingest`**, the same code path as a real upload. Never insert demo rows into Postgres directly, or the upload path goes untested and the demo looks canned (criterion 2).
-  - Idempotent: a dataset is keyed by file content hash + parser version, so re-seeding is a no-op.
-  - Realism: distributions are calibrated to the real data (line-size median/MAD, intermittency share, dimensionless seasonal profiles, MOQ/multiple mix, stock blank patterns). No real codes, names or exact volumes are copied. The case explicitly allows synthetic data with realistic distributions.
-  - **Planted scenarios**, listed in the README, so every must-have is visible in the demo: a strongly seasonal SKU; a sustained-growth SKU; SKUs with 1–2 stockout months; a 50× one-off invoice and a split one; SKUs with inbound before and after the horizon; MOQ/multiple rounding; several categories; a reel↔metre SKU; and a few malformed rows so the import audit has content.
-  - Several datasets can coexist. Runs reference a `datasetId`.
-- Railway setup:
-  - one project with 2 services: the app from the repo `Dockerfile`, plus the Postgres plugin. The pre-deploy step seeds the demo dataset, and real data arrives only by upload;
-  - `DATABASE_URL=${{Postgres.DATABASE_URL}}`;
-  - pre-deploy `npx prisma migrate deploy && npm run seed:demo`;
-  - `OPENAI_API_KEY` as a secret;
-  - healthcheck `/api/health`.
-- CI: GitHub Action runs typecheck, lint, vitest and `next build`.
+- Use Node 24 with `npm ci` and `npm run db:generate`. The only database is the existing Railway production PostgreSQL. For native app development, `npx tsx scripts/with-production-db.ts npm run dev` opens an authenticated SSH relay to it; no local PostgreSQL/Compose service is used.
+- `npm test`, typecheck and build require neither a database nor an API key. CI does not provision a database or apply migrations.
+- **Source import (latest user decision):** real partner workbooks stay git-ignored and excluded from deployment images. Import each supplier workbook through `npm run import -- --supplier IEK --file <path> --write`. Store original bytes and all source rows/cells in `SourceWorkbook`, `SourceSheet`, `SourceRow`; verify byte equality and every projected cell after PostgreSQL read-back. Content hash + supplier + parser version provides idempotence without removing repeated source rows.
+- Source preservation and planning interpretation are separate. No totals, marker-like rows, document types, errors or blanks are changed/removed during the raw import. A later reviewed mapping must construct calculation inputs from PostgreSQL facts, not from Docker files.
+- Committed `sample-data/` workbooks and `scripts/make-demo-data.ts` remain deterministic synthetic test fixtures. They are excluded from Docker/Railway uploads. There is no demo-seeding script, bundled-demo HTTP action or startup seed.
+- Railway: one existing project, one app and PostgreSQL service, production environment; `DATABASE_URL=${{Postgres.DATABASE_URL}}`; pre-deploy **`npm run db:migrate` only**; `OPENAI_API_KEY` secret optional; healthcheck `/api/health`.
+- Docker packages application code and migrations only. Imported data lives in PostgreSQL across builds/restarts. Verify deployment success independently of source-import success.
+- Actual CLI instructions and preservation boundaries: `docs/source-import.md`. Broader product acceptance gates below remain separate from completion of this source-import stage.
 
 ## 8. Must-have proofs (vitest + «Проверка расчёта» dialog, `/api/checks`)
 
@@ -215,7 +208,7 @@ One Next.js application, one PostgreSQL service and one Railway environment. No 
 
 Imports, calculations and backtests run in awaited request handlers with durable `Job` status/progress/errors. Do not return and leave unawaited promises running. Mark interrupted/stale jobs, offer idempotent retry, and prevent failed partial imports becoming active. A status table does not automatically resume work after restart. Measure actual latency rather than assuming imports or calculations finish within a specific duration.
 
-Normalized values, source metadata/hashes and frozen results live in PostgreSQL; uploads are transient and original-file download is not promised. Real source workbooks remain local/git-ignored, synthetic samples committed. Regenerate exports from approved database revisions; do not rely on container disk. Use one designated migration/init path per environment: local initialization or Railway pre-deploy, not repeated migrations from every replica. Pre-deploy may seed PostgreSQL, but runtime artifacts and generated Prisma client must already be in the image. Bind to Railway PORT/all interfaces, configure health checks, verify deployment success and document backup/recovery.
+Normalized values, source metadata/hashes and frozen results live in PostgreSQL; uploads are transient and original-file download is not promised. Real source workbooks remain local/git-ignored, synthetic samples committed. Regenerate exports from approved database revisions; do not rely on container disk. Use one designated migration path: Railway pre-deploy, not repeated migrations from every replica. Pre-deploy never seeds data; source imports run explicitly. Runtime artifacts and generated Prisma client must already be in the image. Bind to Railway PORT/all interfaces, configure health checks, verify deployment success and document backup/recovery.
 
 Use server-only repositories, scoped DTOs, bounded/paginated queries, runtime validation, loading/error states and explicit cache invalidation. Prisma uses one client/pool per process, batched inserts, compound uniqueness/indexes and short transactions outside forecasts/model calls. Persist exact money/quantities with suitable decimals and explicit units; serialize dates/decimals safely. Approval checks expected revision, named approver and required acknowledgements transactionally. Frozen approved history survives edits; active approval is invalidated. Secrets and raw partner payloads stay out of browser bundles and traces.
 

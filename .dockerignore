@@ -17,6 +17,7 @@ CLAUDE.md
 .cache
 coverage
 artifacts
+sample-data
 *.tsbuildinfo
 *.pem
 *.key

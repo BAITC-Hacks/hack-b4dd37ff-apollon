@@ -2,7 +2,7 @@
 
 These 12 XLSX files are generated, fictional data, not copied partner records. Each supplier has 24 fictional products and January 2024–September 2026 monthly history. The cutoff is 22 September 2026; September is partial. Product names and codes explicitly identify synthetic records.
 
-Run `npx tsx scripts/make-demo-data.ts` to regenerate byte-identical archives. Both the demo button and deployment seed must load them using `readDirectory` / `parseWorkbooks` from `lib/ingest`; no precomputed recommendations are present.
+Run `npx tsx scripts/make-demo-data.ts` to regenerate byte-identical archives. These are test fixtures only: they are excluded from Docker and Railway uploads, and are not seeded at startup. Tests exercise `readDirectory` / `parseWorkbooks` from `lib/ingest`; no precomputed recommendations are present. Real IEK files are preserved in Railway PostgreSQL through the separate [source importer](../docs/source-import.md).
 
 The six layouts per supplier reproduce the original worksheet names, Russian headers, header offsets, total rows, numeric/formula cell styles and zero-as-blank monthly display. Differences that supply otherwise unavailable evidence are labelled: transactions have an optional `anonymized_customer_id` column; each MOQ workbook has `Supplements (SYNTHETIC)` with confirmed stockout intervals and an explicit reel/metre conversion. IEK shipment dates include an overdue and a long-dated shipment to exercise timeline handling. The generator uses seeded noise, varied line sizes, sparse sales, seasonal profiles, positive and negative adjustments and blank stock patterns; it does not reproduce real partner volumes.
 

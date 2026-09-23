@@ -1,32 +1,24 @@
 # Apollon — планирование закупок
 
+**Current IEK and Systeme Electric import:** [lossless source import into Railway production PostgreSQL](docs/source-import.md). This preserves every source row/cell and original workbook bytes without interpretation. Docker contains no workbooks and performs no data seeding; development also connects to Railway production.
+
 Explainable supplier replenishment for ТОО «Электрокомплект»: import IEK and Systeme Electric workbooks, review demand corrections and stock risk, calculate a purchase plan, approve a frozen revision, and download supplier drafts. The calculation is deterministic; an optional OpenAI assistant explains and invokes the same application services.
 
-**Status: single-page UI complete and committed; not yet deployed.** `npm run typecheck`, `npm run lint`, `npm test` (81/81) and `npm run build` all pass. The manager UI is now **one page at `/`** (`components/order-workspace.tsx`) covering the full journey — choose data, validate, calculate, review, adjust, approve, export — with a checks/backtest/trends dialog and a history panel, replacing the earlier multi-page app. The old routes `/import`, `/plan`, `/data`, `/checks`, `/backtest`, `/trends` and `/plan/[runId]/sku/[code]` were removed and now 404; their logic lives in API routes (`/api/import`, `/api/runs`, `/api/checks`, `/api/backtest`, `/api/trends`, `/api/history`) called from the single page. A Railway deployment exists at **https://apollon-production-59ea.up.railway.app** but currently runs an older commit with the multi-page UI — the single-page UI in this repo has not been redeployed yet. See [Known limitations](#limitations-and-safety) for the full list, and [the runbook](docs/runbook.md) for current deployment/data status.
+**Status: single-page UI and lossless source import implemented.** `npm run typecheck`, `npm run lint`, `npm test` (85/85) and `npm run build` all pass. The manager UI is now **one page at `/`** (`components/order-workspace.tsx`) covering the full journey — choose data, validate, calculate, review, adjust, approve, export — with a checks/backtest/trends dialog and a history panel, replacing the earlier multi-page app. The old routes `/import`, `/plan`, `/data`, `/checks`, `/backtest`, `/trends` and `/plan/[runId]/sku/[code]` were removed and now 404; their logic lives in API routes (`/api/import`, `/api/runs`, `/api/checks`, `/api/backtest`, `/api/trends`, `/api/history`) called from the single page. A Railway deployment exists at **https://apollon-production-59ea.up.railway.app**; releases are manually uploaded and verified by exact deployment ID. See [Known limitations](#limitations-and-safety) for the full list, and [the runbook](docs/runbook.md) for current deployment/data status.
 
 ## Run from a clean checkout
 
-With Docker and Compose installed:
+Use Node 24 LTS. PostgreSQL runs only in the existing Railway production service. Authenticate the Railway CLI, link this repository to its existing project, and register an SSH key for private access.
 
 ```sh
-docker compose up --build
-```
-
-Open http://localhost:3000. Startup applies PostgreSQL migrations and imports the committed **synthetic Excel workbooks through the real importer**. No API key or login is required for the core workflow.
-
-For native development, use Node 24 LTS and PostgreSQL:
-
-```sh
-cp .env.example .env
-docker compose up db -d
 npm ci
 npm run db:generate
-npm run db:migrate
-npm run seed:demo
-npm run dev
+npx tsx scripts/with-production-db.ts npm run dev
 ```
 
-Local PostgreSQL is exposed on port **55432**. `DATABASE_URL` is mandatory. `OPENAI_API_KEY` and `OPENAI_MODEL` configure only the assistant; the app must report it unavailable when no key is set, not simulate responses.
+Open http://localhost:3000. The wrapper uses an authenticated temporary SSH relay to Railway PostgreSQL; it does not start a local database. Database-free checks are `npm test`, `npm run typecheck` and `npm run build`. `OPENAI_API_KEY` and `OPENAI_MODEL` configure the optional assistant only.
+
+Migrations and source imports are explicit operations documented in [source import](docs/source-import.md). Startup never seeds data. Docker packages application code only; the previous local database/Compose setup has been removed.
 
 ## Manager walkthrough
 
@@ -43,23 +35,27 @@ Everything below happens on the single page at `/` (`components/order-workspace.
 9. **«Проверка расчёта» dialog:** a tabbed dialog (Проверки кейса / Бэктест / Тренды) hosts the checks, backtest and trends views in place — call `GET /api/checks` for the five live must-have proofs, `GET /api/backtest?datasetId=...` for the chronological backtest, and `GET /api/trends?datasetId=...` for ABC/XYZ and category demand directly if you prefer the raw API.
 10. **Copilot:** an optional floating panel calling `/api/agent`. An `OPENAI_API_KEY` enables it; without one it reports itself unavailable. It cannot approve or send orders — the full workflow above works without it.
 
-## Data and synthetic demonstration
+## Data in PostgreSQL
 
-For a clean local clone, the demo runs on **made-up data**. Any real-data results reported here come from local runs on the partner workbooks, which are not redistributed or deployed.
+All twelve original workbooks are preserved in Railway production PostgreSQL in `SourceWorkbook`, `SourceSheet` and `SourceRow`, including headers, totals, hidden/empty rows and repeated entries:
 
-`scripts/make-demo-data.ts` generates byte-reproducible partner-layout XLSX files in committed `sample-data/`. The demo button, Docker initialization and (once the pre-deploy fix lands, see [runbook](docs/runbook.md)) Railway pre-deploy all call the same `lib/ingest` adapters used by uploaded workbooks. No demo recommendations or database rows are hardcoded. Deploy-time seeding is idempotent; interactive demo loads remain separate datasets.
+| Supplier | Workbooks | Sheets | Physical rows | Cells |
+| --- | ---: | ---: | ---: | ---: |
+| IEK | 6 | 6 | 181,547 | 1,585,736 |
+| Systeme Electric | 6 | 8 | 79,720 | 699,779 |
+| Total | 12 | 14 | 261,267 | 2,285,515 |
 
-**Deployed instance data (pending):** the production Railway Postgres database was wiped on 2026-09-23 (schema kept) and is the only database the deployed app uses — local Postgres is not used for the deployed app. Real case data will be loaded into it by a dedicated xlsx→Postgres conversion/seed script that is being built separately; until that lands, the deployed instance has no case data loaded. Partner workbooks used as test data may live in Railway Postgres, but are never committed to Git or baked into the Docker image (`.gitignore`/`.dockerignore`/`.railwayignore` all exclude them).
+Every file's original bytes and every projected row/cell passed database read-back verification. Independent Python OOXML inventories matched the TypeScript parser for all twelve workbooks.
+
+These are **raw source records**, not interpreted planning inputs. No source rows were filtered, merged, corrected or inferred. Existing calculation datasets remain separate until their mappings are explicitly reviewed. Systeme Electric uses the same preservation pipeline and independent workbook verification.
 
 ```sh
-npm run demo:generate
-npm run seed:demo
-npm run import -- --dir "case and data"
+npm run import -- --supplier IEK --file "case and data/IEK/MOQ  ИЭК.xlsx" --write
 ```
 
-The last command is for local partner files only. There are 48 fictional demo products across both suppliers, 33 months of history and deliberate cases for seasonality, sustained growth, estimated and confirmed stockouts, a large one-off invoice, a synthetic customer project split across invoices, early/late/overdue inbound, MOQ and packs, categories, reel/metre conversion, returns, sparse histories and malformed cells. See [sample-data/README.md](sample-data/README.md) for exact scenario codes.
+This command is idempotent and verifies an existing identical archive rather than inserting it twice. See [the preservation contract and SQL examples](docs/source-import.md). Partner workbooks and private audit artifacts are excluded from Git, Docker and Railway directory uploads; originals are retained as private database bytes for fidelity, alongside queryable rows.
 
-Local parser verification on the supplied 12 workbooks found **248,875 valid outgoing invoice rows** (171,579 IEK and 77,296 Systeme). This excludes nine non-outgoing documents from the earlier 248,884-row usable-document audit. The union of codes across all input sources is 3,909 products, not the smaller monthly-sales-only population. Parsing success is not evidence of forecast accuracy or recovered sales.
+Committed `sample-data/` files are deterministic synthetic **test fixtures only**. The Docker copy, demo-seed script, startup seeding and demo-load HTTP action have been removed. The UI lists saved calculation datasets from PostgreSQL and can refresh that list; it never loads bundled workbooks.
 
 ## Calculation and architecture
 
@@ -85,14 +81,14 @@ npm test
 npm run build
 ```
 
-All four commands pass (Prisma client generation, Next.js/Turbopack build, ESLint 9, `vitest run` — 6 files / 81 tests). GitHub Actions is configured to run the same checks on pushes and pull requests.
+All four commands pass (Prisma client generation, Next.js/Turbopack build, ESLint 9, `vitest run` — 8 files / 85 tests). GitHub Actions is configured to run the same checks on pushes and pull requests.
 
-**Deployment:** a live instance runs at **https://apollon-production-59ea.up.railway.app** (health check at `/api/health`). It is currently running an older commit with the multi-page UI — the single-page UI described in this README is committed to `main` but has not been redeployed yet. Railway's `railway.json` Config-as-Code is deprecated and not applied by the platform; the service's Dockerfile path, pre-deploy command, healthcheck path and restart policy were instead set directly in the Railway service settings (mirroring the values in `railway.json` for reference). The pre-deploy command currently only runs `npm run db:migrate`; the `&& npm run seed:demo` half is not executing on the deployed service, so the deployed instance is not seeded with the demo dataset — this is a known, pending fix. See [the runbook](docs/runbook.md) for full current deployment status. Judges should primarily verify by running the project locally (below); the live link is a bonus, not a substitute.
+**Deployment:** a live instance runs at **https://apollon-production-59ea.up.railway.app** (health check at `/api/health`). Railway's `railway.json` Config-as-Code is deprecated and not applied by the platform; the service's Dockerfile path, pre-deploy command, healthcheck path and restart policy were instead set directly in the Railway service settings (mirroring the values in `railway.json` for reference). The pre-deploy command is migration-only (`npm run db:migrate`); automatic data seeding has been removed. See [the runbook](docs/runbook.md) for full current deployment status. Judges should primarily verify by running the project locally (below); the live link is a bonus, not a substitute.
 
 ## Limitations and safety
 
 - **UI is one page; verification tools live in dialogs, not separate screens.** The manager workspace is entirely on `/`; checks/backtest/trends are reached through the in-page **«Проверка расчёта»** dialog or directly via `GET /api/checks`, `GET /api/backtest`, `GET /api/trends`. SKU-level provenance is reached through the row drawer or directly via `GET /api/runs/[id]` (which carries each recommendation's full history/projection/anomalies).
-- **The deployed Railway instance is not yet running the current code or seeded with case data.** Use the local clean-clone setup above to evaluate the current single-page UI and calculation engine.
+- **Raw IEK and Systeme Electric source data is stored, but calculation mappings are separate.** The new source archive is not automatically presented as a calculation-ready dataset. The running application version is tracked in the runbook.
 - This is a shared, unauthenticated demonstration. An approver's typed name is attribution, not verified identity. **Do not upload confidential partner data to the public instance.** Dataset IDs are not access controls.
 - Real files have no customer IDs. Invoice numbers identify orders, not people or customers. Customer-concentration detection is demonstrated only with labelled synthetic customer IDs.
 - Real stockouts and IEK current balances are estimates. Overdue ETAs are not receipts; unknown stock requires review. Lost-sales values are estimates, not measured recovery or revenue.

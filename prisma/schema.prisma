@@ -102,3 +102,41 @@ model Job {
   finishedAt  DateTime?
   @@index([createdAt])
 }
+
+// Private, immutable source archive. No relation to public planning datasets.
+model SourceWorkbook {
+  id            String @id @default(cuid())
+  supplier      String
+  filename      String
+  sha256        String
+  parserVersion String
+  originalBytes Bytes
+  metadata      Json
+  createdAt     DateTime @default(now())
+  sheets        SourceSheet[]
+  @@unique([supplier, sha256, parserVersion])
+}
+
+model SourceSheet {
+  id          String @id @default(cuid())
+  workbookId  String
+  workbook    SourceWorkbook @relation(fields: [workbookId], references: [id], onDelete: Restrict)
+  ordinal     Int
+  name        String
+  path        String
+  dimension   String?
+  attributes  Json
+  metadata    Json
+  rows        SourceRow[]
+  @@unique([workbookId, ordinal])
+}
+
+model SourceRow {
+  sheetId    String
+  sheet      SourceSheet @relation(fields: [sheetId], references: [id], onDelete: Restrict)
+  ordinal    Int
+  attributes Json
+  cells      Json
+  extra      Json
+  @@id([sheetId, ordinal])
+}
