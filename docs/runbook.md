@@ -1,24 +1,26 @@
 # Apollon operational runbook
 
-The authoritative scope is [BUILD_PLAN.md](../BUILD_PLAN.md). Working rules are in [AGENTS.md](../AGENTS.md). Codex integrates parallel subagent work, with no time-based feature cuts. Commit and push each verified stage to `main`. GitHub autodeploy was abandoned at the user's request on 2026-09-23; pushing does not deploy the app.
+The authoritative scope is [BUILD_PLAN.md](../BUILD_PLAN.md). Working rules are in [AGENTS.md](../AGENTS.md). Codex integrates parallel subagent work, with no time-based feature cuts. Commit and push each verified stage to `main`.
 
-## Paused checkpoint — 2026-09-23
+## Current status — 2026-09-23
 
-The user requested a stop, cleanup and commit. All three subagents were interrupted and the local dev server was stopped. Do not resume implementation or deploy until the user asks. This is a work-in-progress checkpoint, not a release; retain unfinished scope in `BUILD_PLAN.md`.
+**Done:**
 
-- Plan consolidation is complete: `BUILD_PLAN.md` is the only implementation plan; `AGENTS.md` was adapted from `CLAUDE.md`. Superseded `HACKATHON_PLAN.md`, `PLAN_REVIEW.md` and `.omc/plans/apollon-winning-plan.md` were removed after merging their content. Original ignored `CLAUDE.md` remains a reference.
-- Present: Next.js scaffold, Prisma schema/migration, dataset/import/run/order/export APIs, pure engine, importer, deterministic synthetic Excel generator, partial manager UI, initial Agents SDK integration, tests, Docker/Railway config and CI.
-- Demo parse and database seed succeeded: 48 fictional SKUs from 12 committed workbooks. A local API calculation returned 48 recommendations; `/api/health` reported a connected database. Real workbook parsing was independently checked locally; no partner workbooks enter Git.
-- Latest checkpoint verification: **typecheck passes; 60 of 62 tests pass; lint has one error**. The earlier production build passed before the final interrupted UI/agent additions; the complete current checkpoint has not been release-validated.
-- Failing test: `tests/agent/agent.test.ts` specialist handoff uses `transfer_to_anomalyreviewer`, which the SDK does not find. Verify the actual SDK handoff name and behavior.
-- Failing test: `tests/repo/repo.test.ts` service-boundary validation. `editOrder` must reject invalid quantities and inherited keys (`toString`, `constructor`; use own-key membership), and `approveOrder` needs direct approver-name validation. Route validation alone is insufficient. Do not deploy this checkpoint before resolving this.
-- Lint: `components/workspace.tsx:66`, synchronous state updates through `refresh()` inside an effect.
-- Remaining work includes unfinished SKU/checks/backtest/trends pages, full browser workflow, dimensionally valid backtest metrics grouped by supplier/unit/horizon, review against every acceptance gate, Docker clean-start validation and deployment. Initial AI code is not live-key verified; no OpenAI API key is configured.
-- Railway PostgreSQL was provisioned successfully (template PostgreSQL 18; local Compose uses PostgreSQL 16). The app has **no deployment and no public domain**. No GitHub source was connected: Railway returned “User does not have access to the repo.” The user cannot grant access and cancelled autodeploy; do not ask again or retry it.
-- The local Compose database was stopped, preserving its volume. Railway resources are preserved; Railway PostgreSQL may continue incurring charges because pausing coding does not remove cloud services.
-- Disposable `.next` build cache, `tsconfig.tsbuildinfo` and three `.DS_Store` files were moved to `/tmp/apollon-cleanup-YAXibi` for recoverability (the operating system may eventually clear `/tmp`). Dependencies, generated Prisma client, ignored agent history, source data and credentials were preserved locally. Ignore rules keep caches, temporary files and secrets out of Git; all 12 synthetic workbooks remain tracked.
+- Single-page manager workspace (`components/order-workspace.tsx`, mounted by `app/page.tsx`) covering choose data → validate → calculate → review → adjust → approve → export in one page, with a history panel (`GET /api/history`) and a «Проверка расчёта» dialog hosting checks/backtest/trends. The old `/import`, `/plan`, `/data`, `/checks`, `/backtest`, `/trends` and `/plan/[runId]/sku/[code]` pages were removed and now 404; their API routes are unchanged and are what the single page calls.
+- `npm run typecheck`, `npm run lint`, `npm test` (6 files / **81 of 81 tests pass**) and `npm run build` all pass clean.
+- Security hardening: streaming body size caps, security headers, CSRF protection, rate limits and CSV/formula-injection guarding on exports.
+- Engine gaps closed: per-horizon/per-unit backtest metrics, anomaly-share confidence, category fallback demand, service-layer validation on `editOrder`/`approveOrder` (rejecting invalid quantities and inherited-key payloads), and the real Agents SDK handoff tool name.
+- A live Railway deployment exists (see [Railway](#railway) below) and responds on `/api/health`.
 
-When resumed, fix the documented failing checks first, finish the retained scope, run all gates and only then deploy manually if requested. No tests were removed or disabled to make this checkpoint appear green.
+**Pending:**
+
+- **Data:** the production Railway Postgres database was wiped on 2026-09-23 (schema kept) and is now the only database the deployed app uses — local Postgres is not used for the deployed app. A dedicated xlsx→Postgres conversion/seed script (loading case data directly into Postgres) is being built separately and has not landed yet; until it does, the deployed instance has no case data loaded. Treat this as **pending — Codex seed**, not yet runnable.
+- **Pre-deploy seed fix:** the Railway pre-deploy command is configured as `npm run db:migrate && npm run seed:demo`, but only the migration half is actually executing on the deployed service; the demo-seed half is not running. This needs a fix before the deployed instance can self-seed.
+- **Deploying the single-page UI:** the live Railway app is still running an older commit (`3a229ab`, multi-page UI). The single-page UI is committed to `main` but has not been redeployed.
+- **Live browser verification on Railway:** once the above land, re-run the [verification flow](#verification-flow) against the live URL, not just locally.
+- Future option: migrate `railway.json` Config-as-Code to Railway Infrastructure as Code (`.railway/railway.ts`) — see the [Railway](#railway) section for why this matters now.
+
+No tests were removed or disabled to make this status look better than it is.
 
 ## Data and secrets
 
@@ -26,7 +28,8 @@ When resumed, fix the documented failing checks first, finish the retained scope
 - Never commit partner workbooks under `case and data/`, legacy `IEK/` or `Systeme electric/`, `.env`, credentials, generated Prisma output, or build artifacts. The case brief remains tracked.
 - Both uploads and demo loads call `lib/ingest`; there is no direct synthetic database bypass. Interactive imports create separate dataset records. Automatic startup seeds reuse an identical demo to avoid duplicating it on every deployment.
 - Public demo results are synthetic. Results claimed for partner data must come from separately verified local imports. There is no authentication: never upload confidential data to the public shared instance.
-- `OPENAI_API_KEY` is optional and server-only. Set it in Railway variables, never in Git or a `NEXT_PUBLIC_` variable. Without it, deterministic planning works and the assistant reports unavailable.
+- `OPENAI_API_KEY` is optional and server-only. It **is configured** as a server-only Railway variable on the deployed service (never printed here, in Git, or in a `NEXT_PUBLIC_` variable). Without it, deterministic planning works and the assistant reports unavailable.
+- The deployed Railway Postgres database was wiped on 2026-09-23 (schema kept); it is the only database the deployed app reads from. Local Postgres (via Compose) is only used for local development and is never the source for the deployed app. Case data for the deployed instance will arrive through a dedicated xlsx→Postgres conversion/seed script that is being built separately (pending — Codex seed); do not invent commands for it here until it lands.
 
 ## Clean local setup
 
@@ -68,26 +71,35 @@ Review staged file names and content before each commit. Check `git ls-files 'ca
 - Environment: `production`, `428afbae-1686-4dbb-a3e5-200a2a2cd0d2`.
 - App: `apollon`, `02be117b-61a2-4e26-a0cc-6b475d2d321c`.
 - PostgreSQL: `d996992f-11a9-46c3-86da-8cc7b526fa5b`.
-- Git repository: `BAITC-Hacks/hack-b4dd37ff-apollon`, branch `main`; **not connected as a Railway source**.
+- Git repository: `BAITC-Hacks/hack-b4dd37ff-apollon`, branch `main`; **not connected as a Railway source** (deploys are manual CLI directory uploads, not autodeploy).
 - `DATABASE_URL` references `${{Postgres.DATABASE_URL}}` on the private network.
-- `railway.json` selects the Node 24 Dockerfile. Pre-deploy runs migrations and idempotent demo import; startup runs the Next.js standalone server. Health endpoint: `/api/health`.
+- **Live URL:** https://apollon-production-59ea.up.railway.app. Health check: `/api/health`. The deployed commit is `3a229ab` (multi-page UI, before the single-page workspace and `/api/history` landed) — redeploy to bring it current.
+- **`railway.json` is NOT applied by Railway.** Config-as-Code is deprecated/rejected by the platform for this service. The values it describes (Dockerfile build, pre-deploy command, healthcheck path, restart policy) were instead set **directly on the service** in the Railway dashboard/CLI, not read from the file. Treat `railway.json` in the repo as documentation of intent, not as the actual live configuration — verify the service's real settings with `mcp__railway__get_service_config` or the dashboard before trusting it.
+- Configured pre-deploy command: `npm run db:migrate && npm run seed:demo`. **Known issue:** only the `db:migrate` half is actually executing on deploy; `seed:demo` is not running, so the deployed database is not currently seeded with demo data. A fix to the pre-deploy command (or an explicit follow-up step) is pending.
+- Restart policy: `ON_FAILURE`, max 3 retries.
+- Future option: migrate off `railway.json` to Railway's Infrastructure as Code format (`.railway/railway.ts`), which Railway does apply, instead of hand-configuring the service.
 
-Future manual deployment, only after the user resumes and release checks pass:
+Manual deployment:
 
 ```sh
 railway up --project 5458bd50-da4b-44d4-9670-38d2e6849f7e --environment 428afbae-1686-4dbb-a3e5-200a2a2cd0d2 --service 02be117b-61a2-4e26-a0cc-6b475d2d321c --detach -m "Verified release"
 railway deployment list --service 02be117b-61a2-4e26-a0cc-6b475d2d321c --environment 428afbae-1686-4dbb-a3e5-200a2a2cd0d2 --json
 ```
 
-Inspect the exact deployment returned by upload. Do not treat queued/building as success. Require Railway `SUCCESS`, then HTTP 200 from `/api/health`, a visible demo dataset, and a successful calculation. Manual directory deployment does not require Railway GitHub App access and does not enable autodeploy. `railway.json` currently remains supported but the CLI reports its retirement on 2026-12-01; revisit Railway's current IaC guidance before deploying beyond that date.
+Inspect the exact deployment returned by upload. Do not treat queued/building as success. Require Railway `SUCCESS`, then HTTP 200 from `/api/health`, a visible dataset, and a successful calculation. Manual directory deployment does not require Railway GitHub App access and does not enable autodeploy.
 
 ## Verification flow
 
-1. Open Import; load demo and confirm its synthetic badge and import audit, including deliberate malformed rows.
-2. Calculate both suppliers. Inspect seasonal/growing products, stockout estimates and uncertainty, one-off invoices/customer fixture, inbound dates, category differences, MOQ/pack rounding, and reel/metre conversion.
-3. Change policy, run a scenario, inspect quantity differences and SKU provenance.
+Local (clean clone, demo data):
+
+1. Open `/`; use "Использовать данные кейса" to load the demo dataset and confirm its «Демо-данные» badge and import audit, including deliberate malformed rows, via "Просмотреть данные".
+2. Calculate both suppliers. Inspect seasonal/growing products, stockout estimates and uncertainty, one-off invoices/customer fixture, inbound dates, category differences, MOQ/pack rounding, and reel/metre conversion in the results table and SKU drawer.
+3. Change policy or scope, recalculate, and compare quantity differences and SKU provenance against the prior run.
 4. Edit a proposed quantity; approve using a name and acknowledgement where required. Export XLSX, CSV and an email draft. Edits must invalidate approval; stale revisions must fail.
-5. Run live checks and cutoff-safe backtest. Test the assistant only with a configured API key; never substitute canned responses.
+5. Open «Проверка расчёта» and confirm the checks/backtest/trends tabs render live data from `/api/checks`, `/api/backtest`, `/api/trends`. Test the Copilot panel only with a configured API key; never substitute canned responses.
+6. Open «История расчётов» and confirm a saved run reopens without recalculating.
+
+Live (Railway, once the single-page UI is redeployed and seeded): repeat steps 1–6 against https://apollon-production-59ea.up.railway.app and confirm `/api/health` returns `status: "ok"` first.
 
 ## Recovery and troubleshooting
 

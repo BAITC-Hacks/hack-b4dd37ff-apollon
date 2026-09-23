@@ -72,6 +72,30 @@ export async function listTransactions(filter: ExplorerFilter, page?: number, pa
   return { rows: rows.map(r => ({ code: r.code, article: r.article, name: r.name, unit: r.unit, date: r.date, invoice: r.invoice, quantity: r.quantity, warehouse: r.warehouse })), total: rows[0] ? Number(rows[0].total) : 0, page: p, pageSize: size };
 }
 
+export interface RunHistoryOrder { supplier: string; status: string; revision: number; approver: string | null; approvedAt: string | null }
+export interface RunHistoryEntry { id: string; datasetId: string; datasetName: string; synthetic: boolean; createdAt: string; baseRunId: string | null; scope: { supplier?: string; category?: string } | null; orders: RunHistoryOrder[] }
+
+/** Read-only history listing for the "История расчётов" panel: adds dataset name/type and per-supplier order status on top of what /api/runs exposes, without recalculating anything. */
+export async function listRunHistory(datasetId?: string): Promise<RunHistoryEntry[]> {
+  const db = getDb();
+  const runs = await db.run.findMany({
+    where: datasetId ? { datasetId } : {},
+    select: {
+      id: true, datasetId: true, createdAt: true, baseRunId: true, filter: true,
+      dataset: { select: { name: true, synthetic: true } },
+      orders: { select: { supplier: true, status: true, revision: true, approver: true, approvedAt: true } },
+    },
+    orderBy: { createdAt: "desc" },
+    take: 50,
+  });
+  return runs.map(r => ({
+    id: r.id, datasetId: r.datasetId, datasetName: r.dataset.name, synthetic: r.dataset.synthetic,
+    createdAt: r.createdAt.toISOString(), baseRunId: r.baseRunId,
+    scope: (r.filter as { supplier?: string; category?: string } | null) ?? null,
+    orders: r.orders.map(o => ({ supplier: o.supplier, status: o.status, revision: o.revision, approver: o.approver, approvedAt: o.approvedAt?.toISOString() ?? null })),
+  }));
+}
+
 export async function listDeliveries(filter: ExplorerFilter, page?: number, pageSize?: number): Promise<Page<DeliveryRow>> {
   const db = getDb(); const p = clampPage(page), size = clampSize(pageSize);
   const rows = await db.$queryRaw<(DeliveryRow & { total: bigint })[]>(Prisma.sql`

@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { PlayCircle } from "lucide-react";
-import { api, EmptyState, ErrorNotice, LoadingState, num, PageHeading, supplierLabel, useWorkspace } from "./workspace";
+import { api, ErrorNotice, LoadingState, num, PageHeading, supplierLabel, useWorkspace } from "./workspace";
 import type { BacktestResult } from "@/lib/contracts/engine";
 
 export function BacktestDashboard() {
@@ -33,7 +33,7 @@ export function BacktestDashboard() {
   return <>
     <PageHeading eyebrow="Историческая проверка прогноза" title="Бэктест" description="Хронологические точки отсчёта май–июль 2026 с переобучением очистки, сезонности и тренда на каждом срезе; сравнение с сезонным наивным и средним за 12 месяцев по каждому горизонту и единице измерения."><button className="button primary" disabled={!datasetId || busy} onClick={() => void run()}>{busy ? <span className="spinner" /> : <PlayCircle size={15} />} Запустить бэктест</button></PageHeading>
     <ErrorNotice error={error} />
-    {!datasetId ? <EmptyState /> : !ran ? <div className="empty-state"><h2>Запустите проверку</h2><p>Расчёт переобучается на каждой точке отсчёта для набора «{dataset?.name}» и не использует будущие данные.</p></div> : busy ? <LoadingState text="Переобучаем модель на исторических точках…" /> : result && <>
+    {!ran ? <div className="empty-state"><h2>Запустите проверку</h2><p>Расчёт переобучается на каждой точке отсчёта для набора «{dataset?.name}» и не использует будущие данные.</p></div> : busy ? <LoadingState text="Переобучаем модель на исторических точках…" /> : result && <>
       {result.warnings.length > 0 && <details className="notice warning"><summary>Допущения бэктеста · {result.warnings.length}</summary>{result.warnings.map((w, i) => <p key={i}>{w}</p>)}</details>}
       {horizons.map(h => <section className="card" key={h}><header className="card-header"><div><h2>Горизонт {h} мес.</h2><p>Модель против сезонного наивного и среднего за 12 месяцев, по единицам измерения (единицы не суммируются).</p></div></header>
         <div className="table-scroll"><table><thead><tr><th>Модель</th><th>Ед.</th><th className="number">MAE</th><th className="number">WAPE</th><th className="number">Смещение</th><th className="number">n</th></tr></thead><tbody>{result.metrics.filter(m => m.horizon === h).map(m => <tr key={`${m.model}-${m.horizon}-${m.unit}`}><td>{m.model}</td><td>{m.unit || "—"}</td><td className="number">{num(m.mae, 2)}</td><td className="number">{m.wape === null ? "—" : `${num(m.wape * 100, 1)}%`}</td><td className="number">{num(m.bias, 2)}</td><td className="number">{num(m.count)}</td></tr>)}</tbody></table></div>

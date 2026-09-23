@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { ChevronLeft, ChevronRight, Search } from "lucide-react";
-import { api, dateLabel, EmptyState, LoadingState, Metric, num, PageHeading, supplierLabel, useWorkspace } from "./workspace";
+import { api, dateLabel, LoadingState, Metric, num, PageHeading, supplierLabel, useWorkspace } from "./workspace";
 
 type Tab = "products" | "sales" | "stocks" | "transactions" | "deliveries" | "issues";
 const tabs: { id: Tab; label: string }[] = [
@@ -54,7 +54,6 @@ export function DataExplorer() {
   const issues = useMemo(() => (details?.suppliers || []).filter(s => !supplier || s.supplier === supplier).flatMap(s => s.issues.map(i => ({ ...i, supplier: i.supplier || s.supplier }))), [details, supplier]);
 
   if (datasetLoading) return <LoadingState />;
-  if (!datasetId) return <><PageHeading eyebrow="Полный доступ к загруженным данным" title="Данные" description="Все товары, продажи, остатки, транзакции и поставки активного набора." /><EmptyState /></>;
 
   const columns: Record<Exclude<Tab, "issues">, { key: string; label: string; number?: boolean }[]> = {
     products: [{ key: "code", label: "Код 1С" }, { key: "article", label: "Артикул" }, { key: "name", label: "Наименование" }, { key: "unit", label: "Ед." }, { key: "category", label: "Категория" }, { key: "moq", label: "MOQ", number: true }, { key: "multiple", label: "Кратность", number: true }],

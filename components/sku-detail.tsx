@@ -1,8 +1,7 @@
 "use client";
 
-import Link from "next/link";
 import { useState } from "react";
-import { ArrowUpRight, History, RotateCcw, TriangleAlert } from "lucide-react";
+import { History, RotateCcw, TriangleAlert } from "lucide-react";
 import type { Recommendation } from "@/lib/contracts/engine";
 import { DemandChart, StockChart } from "./charts";
 import { api, dateLabel, ErrorNotice, num, supplierLabel } from "./workspace";
@@ -10,7 +9,7 @@ import { api, dateLabel, ErrorNotice, num, supplierLabel } from "./workspace";
 const urgencyLabels = { CRITICAL: "Критично", HIGH: "Высокий", NORMAL: "Планово" };
 const confidenceLabels = { high: "Высокая", medium: "Средняя", low: "Низкая" };
 
-/** Formula decomposition + chart + anomalies + delivery timeline, built strictly from the recommendation's provenance. Shared by the drawer and the standalone drill-down page. */
+/** Formula decomposition + chart + anomalies + delivery timeline, built strictly from the recommendation's provenance. Rendered inside the single-page workspace's product detail drawer. */
 export function SkuDetailBody({ rec, runId, datasetId, onScenario }: { rec: Recommendation; runId: string; datasetId: string; onScenario?: (newRunId: string) => void }) {
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
@@ -61,6 +60,6 @@ export function SkuDetailBody({ rec, runId, datasetId, onScenario }: { rec: Reco
     {rec.projection.some(pt => pt.inbound > 0) && <section className="card"><header className="card-header"><div><h2>Товар в пути</h2><p>Ожидаемые поступления в пределах горизонта расчёта.</p></div></header><div className="card-body">
       {rec.projection.filter(pt => pt.inbound > 0).map((pt, i) => <div className="timeline-row" key={i}><span className="timeline-dot" /><strong>{dateLabel(pt.date)}</strong><span>+{num(pt.inbound, 1)} {rec.unit}</span></div>)}
     </div></section>}
-    <div className="notice"><History size={14} style={{ display: "inline", verticalAlign: "-2px", marginRight: 6 }} />Поставщик: <strong>{supplierLabel(rec.supplier)}</strong> · Код 1С {rec.code} · Артикул {rec.supplierArticle || "—"}. <Link className="text-link" href={`/plan/${runId}/sku/${encodeURIComponent(rec.key)}`}>Открыть на отдельной странице <ArrowUpRight size={13} /></Link></div>
+    <div className="notice"><History size={14} style={{ display: "inline", verticalAlign: "-2px", marginRight: 6 }} />Поставщик: <strong>{supplierLabel(rec.supplier)}</strong> · Код 1С {rec.code} · Артикул {rec.supplierArticle || "—"}.</div>
   </div>;
 }

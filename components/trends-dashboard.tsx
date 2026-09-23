@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { TrendChart } from "./charts";
-import { api, EmptyState, ErrorNotice, LoadingState, PageHeading, supplierLabel, useWorkspace } from "./workspace";
+import { api, ErrorNotice, LoadingState, PageHeading, supplierLabel, useWorkspace } from "./workspace";
 
 interface TrendRow { supplier: string; category: string; unit: string; month: string; quantity: number }
 interface Loaded { datasetId: string; rows?: TrendRow[]; error?: string }
@@ -36,7 +36,7 @@ export function TrendsDashboard() {
   return <>
     <PageHeading eyebrow="Категории и единицы измерения" title="Динамика спроса" description="Суммарный проданный объём по категориям и месяцам. Метры, штуки и комплекты никогда не суммируются в одну величину — каждая группа единиц измерения показана отдельно." />
     <ErrorNotice error={current?.error} />
-    {!datasetId ? <EmptyState /> : loading ? <LoadingState text="Строим динамику…" /> : rows.length === 0 ? <div className="empty-state"><h2>Нет данных о продажах</h2><p>В наборе «{dataset?.name}» не найдено помесячных продаж для построения тренда.</p></div> : <>
+    {loading ? <LoadingState text="Строим динамику…" /> : rows.length === 0 ? <div className="empty-state"><h2>Нет данных о продажах</h2><p>В наборе «{dataset?.name}» не найдено помесячных продаж для построения тренда.</p></div> : <>
       <div className="tab-bar" role="tablist" aria-label="Поставщик и единица измерения">{groups.map(g => <button key={`${g.supplier}-${g.unit}`} role="tab" aria-selected={active?.supplier === g.supplier && active?.unit === g.unit} className={active?.supplier === g.supplier && active?.unit === g.unit ? "active" : ""} onClick={() => setGroup(g)}>{supplierLabel(g.supplier)} · {g.unit || "ед."}</button>)}</div>
       <section className="card"><header className="card-header"><div><h2>{active ? `${supplierLabel(active.supplier)} · ${active.unit || "ед."}` : ""}</h2><p>Сумма проданного количества по категориям, помесячно.</p></div></header><div className="card-body"><TrendChart data={chartData} series={categories.map((c, i) => ({ key: c || "без категории", name: `Категория ${c || "не указана"}`, color: palette[i % palette.length] }))} /></div></section>
     </>}

@@ -132,19 +132,24 @@ All thresholds live in `Policy` and are recorded in the provenance of every reco
 - **Output/tool guardrail:** block any claim of sending or approving. Approval exists only as a UI Server Action.
 - Tracing is on with **sensitive payloads excluded** (SDK tracing config: no tool inputs/outputs in traces, only run IDs, timings and tool names). Only aggregates are sent to the model (from audit). With no `OPENAI_API_KEY`, the panel shows "unavailable" and nothing is simulated.
 
-## 6. UI (Codex): Next.js App Router pages
+## 6. UI: single-page workspace, no sidebar
 
-1. `/import`: two buttons, **Upload workbooks** (the partner's `.xlsx` files, per supplier) or **Load demo dataset**. Both go through the same `lib/ingest` adapters and create a `Dataset`. The active dataset is shown in the header, with a **DEMO (synthetic)** badge when relevant. Upload validation: `.xlsx` only, size limit, the sheet/header is recognized by pattern, and missing files per supplier are allowed and reported. Show the audit table (coverage, duplicates, mismatches, reconciliation). Malformed files produce a friendly error, not a 500.
-2. `/plan`: pick supplier, category and policy (LT, review, service level per category, growth override, stockout toggle). Calculate to create a Run. Show a table grouped by supplier (sortable, filterable, urgency chips, confidence). Quantities are edited inline, and **editing invalidates approval**. Approval is enforced in the service layer, never by the agent: `approveOrder(orderId, expectedRevision)` runs in a Prisma transaction with an optimistic revision check. Exports read the immutable approved revision. The approver's name is recorded; there is no login (see §11). There are Approve buttons per supplier or line.
-3. `/plan/[runId]/sku/[code]`: chart of raw vs cleaned vs adjusted vs forecast. OOS months are shaded, one-off markers are shown (click to restore), plus the delivery timeline, projected stock line and full provenance.
-4. `/checks`: runs the 5 must-have checks **live** through the engine on labelled synthetic fixtures **and** on real-data examples, with pass/fail and numbers.
-5. `/backtest`: chronological origins May, June and July 2026, horizons 1–3 months; score only fully observed target months through August and show sample counts per horizon. Refit cleaning, stockout estimation, seasonality and trend at each origin without future inputs. MAE, WAPE and bias versus seasonal naive and 12-month mean, with zero-demand handling and compatible units.
-6. `/trends`: demand trend by category with dimensionally valid aggregation and ABC/XYZ views. This is retained scope.
-7. Copilot side panel on `/plan` (streaming).
-8. Export (`/api/export`): approved lines only.
-   - XLSX in the manager's worksheet layout (fills `Заказ` and adds Обоснование/Срочность, one sheet per supplier).
-   - 1C CSV: `Код 1с;Артикул поставщика;Наименование;Количество;Ед.;Поставщик`, UTF-8 BOM, `;` separator. The column mapping is configurable, and text cells are escaped against formula injection (leading `= + - @`). The README calls 1C compatibility unverified (from audit).
-   - Supplier/email drafts: downloadable text generated from actual order lines, explicitly marked pending or approved. No supplier dispatch tool exists. Defend spreadsheet text against dangerous prefixes after leading whitespace/control characters while preserving legitimate numeric cells.
+The UI is one workspace at `/` (`components/order-workspace.tsx`, mounted by `app/page.tsx`), not a set of pages the manager has to click through. It implements the full journey **choose data → validate → calculate → review → adjust → approve → export** in one scroll, using in-page state, expandable sections, dialogs and a right-hand product drawer instead of navigation. This replaces the earlier `/`, `/import`, `/plan`, `/data`, `/checks`, `/backtest`, `/trends` and `/plan/[runId]/sku/[code]` page set; those pages were removed and now return 404 (API routes underneath are unchanged and still used by the workspace and by tests/scripts). See `UI_UX_REDESIGN_PROMPT.md` for the full interaction spec this section summarizes.
+
+1. **Header**: Apollon name/logo, **Новый расчёт** (returns to data selection; offers to save unsaved quantity edits first) and **История расчётов** (opens a panel over `/api/history`, an additive read-only endpoint in `lib/repo/explorer.ts` that joins `Run` → `Dataset` + `Order` so each entry shows date, dataset name/type, scope and per-supplier order status; opening an entry loads that exact saved `Run` — it never recalculates).
+2. **Data step** (shown until a dataset is active, or on demand via "Изменить данные"): two equally-sized cards — **Загрузить свои отчёты** (multi-file drop zone + picker, upload goes through the same `lib/ingest` adapters as before, plus a note on required report types and where the `sample-data/` fixtures live) and **Использовать данные кейса** (lists every dataset from `/api/datasets`, labelling synthetic datasets **Демо-данные** and real imports **Данные кейса** truthfully — including showing duplicate case imports side by side rather than hiding one). Both paths converge on the same `Dataset` record and the same calculation code path; the UI does not special-case one over the other.
+3. **Validation summary**: once a dataset is active, a compact "Проверка данных перед расчётом" card shows file/product/transaction counts, distinguishes `error`-severity issues (flagged as needing attention, since a dataset that fails hard already fails at `/api/import`) from `warning`/`info` issues, and offers **Просмотреть данные** which opens the existing paginated `DataExplorer` (`lib/repo/explorer.ts`, `/api/data/*`) in a large dialog so every imported row for both suppliers stays reachable from the workspace.
+4. **Parameters**: calculation scope (supplier, category) sits next to the **Рассчитать заказ/Пересчитать** button; lead time, review period, service level, growth override, safety days, stockout compensation, outlier filtering and per-category policy overrides live in an expandable "Расширенные настройки" section. Changing any of these (or the scope) sets a `требуется пересчёт` banner instead of silently recalculating; the display filters in the results table (search, urgency, "требуют проверки") are intentionally separate state and never affect what was calculated.
+5. **Calculation**: `POST /api/runs` unchanged — real upload/import/calculate stages, no fake progress, buttons disabled while busy, and a failed calculation preserves the chosen scope/policy so the user can retry.
+6. **Results**: the input area collapses into a one-line context bar (source, cutoff date, scope, "Изменить данные"). Below it, the supplier-grouped table (`Рекомендовано` vs. editable `Количество к заказу`, urgency, confidence, explanation link) is the same engine output and edit/approve/export/audit logic that previously lived in `PlanDashboard`, now embedded directly in the workspace. Unknown stock renders as "нет данных", not `0`; unit totals per supplier are never summed across incompatible units; a supplier total in ₸ is shown only when every priced line has a cost, otherwise a "≥ … (без цены: N поз.)" partial total.
+7. **Product drawer**: clicking a row opens `SkuDetailBody` (unchanged formula breakdown, charts, anomalies, delivery timeline) in a right-hand drawer without losing table scroll position or filters.
+8. **Approval and export**: a sticky bottom bar (padded main content so it never permanently hides the last row) shows selection count and overall order status, with **Утвердить**/**Сохранить изменения**/direct download actions. Approval is still enforced only in `lib/repo/index.ts` (`approveOrder`, optimistic revision check in a transaction); editing a quantity after approval still bumps the revision and clears `status`, forcing re-approval before export/download are available again.
+9. **Проверка расчёта** dialog: a compact tabbed dialog (Проверки кейса / Бэктест / Тренды) hosts the existing `ChecksDashboard`, `BacktestDashboard` and `TrendsDashboard` components unchanged, so the §8/§9 evidence stays live and reachable without being separate navigable pages.
+10. Copilot remains an optional floating panel (`components/workspace.tsx`); the full workflow above works without it.
+11. Export (`/api/export`): unchanged — approved lines only.
+    - XLSX in the manager's worksheet layout (fills `Заказ` and adds Обоснование/Срочность, one sheet per supplier).
+    - 1C CSV: `Код 1с;Артикул поставщика;Наименование;Количество;Ед.;Поставщик`, UTF-8 BOM, `;` separator. The column mapping is configurable, and text cells are escaped against formula injection (leading `= + - @`). The README calls 1C compatibility unverified (from audit).
+    - Supplier/email drafts: downloadable text generated from actual order lines, explicitly marked pending or approved. No supplier dispatch tool exists. Defend spreadsheet text against dangerous prefixes after leading whitespace/control characters while preserving legitimate numeric cells.
 
 ## 7. Reproducibility and Railway
 
@@ -166,13 +171,13 @@ All thresholds live in `Policy` and are recorded in the provenance of every reco
   - healthcheck `/api/health`.
 - CI: GitHub Action runs typecheck, lint, vitest and `next build`.
 
-## 8. Must-have proofs (vitest + `/checks`)
+## 8. Must-have proofs (vitest + «Проверка расчёта» dialog, `/api/checks`)
 
 | # | Test |
 |---|---|
 | 1 | Fixture SKU, not saturated. Vary sales, stock, inbound (ETA inside vs outside H), category policy and growth **one at a time**. Assert the direction of change on raw need **and** on the final qty. |
 | 2 | Seasonal fixture: the forecast peak month exceeds the trough by more than 30% and the correlation with the true pattern is > 0.8. A step-up growth fixture raises the baseline; the persistence guard keeps it from being flagged. |
-| 3 | Stockout fixture: `lostDemand > 0` and need(compensated) > need(raw). Real-data example on `/checks`. |
+| 3 | Stockout fixture: `lostDemand > 0` and need(compensated) > need(raw). Real-data example in the «Проверка расчёта» dialog. |
 | 4 | Inject a 50× invoice: regular forecast change < 5%. Split-customer fixture caught. Persistent increase **not** removed. |
 | 5 | Every row has a supplier, a non-empty explanation and numeric provenance. Grouped export totals equal the approved run. |
 | Ops | zero need, pack rounding, MOQ > need, zero MAD, returns, missing stock, late inbound, unit conversion, malformed cells, empty/garbage upload |
