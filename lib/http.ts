@@ -50,6 +50,24 @@ export async function readJson(request:Request,maxBytes:number=DEFAULT_JSON_LIMI
   if(!buf.length)return undefined;
   return JSON.parse(buf.toString("utf-8"));
 }
+// Pagination query params on the data-explorer routes must be validated rather than silently
+// coerced: Number("abc")||0 style parsing turns malformed input into NaN, which downstream
+// clamping quietly rewrites into a default. Reject non-integer/out-of-range input with a 400
+// instead, so bad requests fail loudly rather than serving an unexpected page.
+export function parsePageParam(raw: string | null): number {
+  if (raw === null) return 0;
+  if (!/^\d+$/.test(raw)) throw new AppError("Invalid page parameter", 400);
+  const n = Number(raw);
+  if (!Number.isSafeInteger(n) || n < 0) throw new AppError("Invalid page parameter", 400);
+  return n;
+}
+export function parsePageSizeParam(raw: string | null): number {
+  if (raw === null) return 50;
+  if (!/^\d+$/.test(raw)) throw new AppError("Invalid pageSize parameter", 400);
+  const n = Number(raw);
+  if (!Number.isSafeInteger(n) || n < 1 || n > 200) throw new AppError("Invalid pageSize parameter", 400);
+  return n;
+}
 // Single-instance Railway deployment, so an in-process token bucket is sufficient (no shared cache needed).
 // Keyed by the first hop of x-forwarded-for (the client closest to Railway's edge), falling back to a
 // constant bucket when no proxy header is present (e.g. local dev, curl without the header).

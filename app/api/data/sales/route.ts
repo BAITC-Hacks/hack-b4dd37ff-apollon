@@ -1,11 +1,11 @@
 import { listMonthlySales } from "@/lib/repo/explorer";
 import { AppError } from "@/lib/repo";
-import { apiError } from "@/lib/http";
+import { apiError, parsePageParam, parsePageSizeParam } from "@/lib/http";
 export async function GET(request: Request) {
   try {
     const url = new URL(request.url); const datasetId = url.searchParams.get("datasetId");
     if (!datasetId) throw new AppError("Choose a dataset");
-    const page = await listMonthlySales({ datasetId, supplier: url.searchParams.get("supplier") || undefined, search: url.searchParams.get("q") || undefined }, Number(url.searchParams.get("page") || 0), Number(url.searchParams.get("pageSize") || 50));
+    const page = await listMonthlySales({ datasetId, supplier: url.searchParams.get("supplier") || undefined, search: url.searchParams.get("q") || undefined }, parsePageParam(url.searchParams.get("page")), parsePageSizeParam(url.searchParams.get("pageSize")));
     return Response.json(page);
   } catch (e) { return apiError(e); }
 }

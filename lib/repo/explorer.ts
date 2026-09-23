@@ -1,8 +1,18 @@
 /** Read-only, bounded/paginated queries for the "Данные" explorer. Never loads a full dataset into memory. */
+import { createHash } from "node:crypto";
 import { Prisma } from "@/generated/prisma/client";
 import { getDb } from "@/lib/db";
 import { SOURCE_MAPPING_VERSION } from "@/lib/ingest/source-mapping";
 import type { Product as ProductAttrs } from "@/lib/contracts/engine";
+
+// Invoice numbers are not customer IDs, but the case requires client privacy, so the explorer never
+// returns the raw number. A short stable pseudonym (scoped per dataset so the same invoice number
+// reused across datasets doesn't correlate) lets rows stay visually distinguishable without leaking
+// the source document identifier.
+export function pseudonymizeInvoice(datasetId: string, invoice: string): string {
+  const hash = createHash("sha256").update(`${datasetId}:${invoice}`).digest("hex");
+  return `INV-${hash.slice(0, 10)}`;
+}
 
 export interface Page<T> { rows: T[]; total: number; page: number; pageSize: number }
 export interface ProductRow { code: string; article: string; name: string; unit: string; category: string; moq: number | null; multiple: number | null; unitConversion: number | null; cost: number | null; growthRate: number | null }
@@ -70,7 +80,7 @@ export async function listTransactions(filter: ExplorerFilter, page?: number, pa
     FROM "Product" p CROSS JOIN LATERAL jsonb_to_recordset(p."transactions") AS t(date text, invoice text, quantity double precision, warehouse text)
     WHERE p."datasetId" = ${filter.datasetId} ${supplierFragment(filter.supplier)} ${searchFragment(filter.search)}
     ORDER BY t.date DESC, p.code LIMIT ${size} OFFSET ${p * size}`);
-  return { rows: rows.map(r => ({ code: r.code, article: r.article, name: r.name, unit: r.unit, date: r.date, invoice: r.invoice, quantity: r.quantity, warehouse: r.warehouse })), total: rows[0] ? Number(rows[0].total) : 0, page: p, pageSize: size };
+  return { rows: rows.map(r => ({ code: r.code, article: r.article, name: r.name, unit: r.unit, date: r.date, invoice: pseudonymizeInvoice(filter.datasetId, r.invoice), quantity: r.quantity, warehouse: r.warehouse })), total: rows[0] ? Number(rows[0].total) : 0, page: p, pageSize: size };
 }
 
 export interface RunHistoryOrder { supplier: string; status: string; revision: number; approver: string | null; approvedAt: string | null }

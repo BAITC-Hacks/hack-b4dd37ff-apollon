@@ -155,7 +155,7 @@ function fitSeries(history: DemandPoint[], pooled: number[], product: Product, p
   const slope = theilSen(values), average = mean(values);
   // A new SKU or one with an all-period stockout has no demand basis at all (average === 0 across
   // every observed month); dividing/forecasting from zero would silently manufacture a zero
-  // recommendation. Fall back to an explicit, editable per-category prior instead (BUILD_PLAN §1.4/§4.4).
+  // recommendation. Fall back to an explicit, editable per-category prior instead.
   const hasDemandBasis = values.some(n => n > 0);
   const fallbackDemand = policy.categoryFallbackDemand[product.category];
   const usedCategoryFallback = !hasDemandBasis && fallbackDemand !== undefined && Number.isFinite(fallbackDemand) && fallbackDemand > 0;

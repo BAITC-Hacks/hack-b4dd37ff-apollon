@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { readCappedBody, rejectCrossOrigin, rateLimit } from "../../lib/http";
+import { readCappedBody, rejectCrossOrigin, rateLimit, parsePageParam, parsePageSizeParam } from "../../lib/http";
 import { AppError } from "../../lib/repo";
 import { safeText, supplierWorkbook } from "../../lib/export";
 import { calculatePlan } from "../../lib/engine";
@@ -89,6 +89,34 @@ describe("readCappedBody", () => {
   it("returns an empty buffer when the request has no body", async () => {
     const buf = await readCappedBody(new Request("https://apollon.example/api/runs"), 10);
     expect(buf.length).toBe(0);
+  });
+});
+
+describe("parsePageParam", () => {
+  it("defaults to 0 when absent", () => { expect(parsePageParam(null)).toBe(0); });
+  it("accepts 0 and positive integers", () => {
+    expect(parsePageParam("0")).toBe(0);
+    expect(parsePageParam("7")).toBe(7);
+  });
+  it("rejects a negative page as an AppError(400) instead of coercing to NaN/0", () => {
+    expect(() => parsePageParam("-1")).toThrow(AppError);
+    try { parsePageParam("-1"); } catch (e) { expect((e as AppError).status).toBe(400); }
+  });
+  it("rejects a non-numeric page", () => { expect(() => parsePageParam("abc")).toThrow(AppError); });
+  it("rejects a decimal page", () => { expect(() => parsePageParam("1.5")).toThrow(AppError); });
+});
+
+describe("parsePageSizeParam", () => {
+  it("defaults to 50 when absent", () => { expect(parsePageSizeParam(null)).toBe(50); });
+  it("accepts values within 1..200", () => {
+    expect(parsePageSizeParam("1")).toBe(1);
+    expect(parsePageSizeParam("200")).toBe(200);
+  });
+  it("rejects 0", () => { expect(() => parsePageSizeParam("0")).toThrow(AppError); });
+  it("rejects values above 200", () => { expect(() => parsePageSizeParam("201")).toThrow(AppError); });
+  it("rejects a non-numeric pageSize instead of coercing to NaN", () => {
+    expect(() => parsePageSizeParam("abc")).toThrow(AppError);
+    try { parsePageSizeParam("abc"); } catch (e) { expect((e as AppError).status).toBe(400); }
   });
 });
 

@@ -1,6 +1,6 @@
 # Apollon — repository working instructions
 
-Adapted from the original `CLAUDE.md` and the user's latest decisions. `BUILD_PLAN.md` is the single authoritative implementation plan. The case is automatic supplier replenishment for ТОО «Электрокомплект», with IEK and Systeme Electric data.
+Adapted from the original `CLAUDE.md` and the user's latest decisions. `README.md` is the single project document (methodology, setup, verification, limitations). The case is automatic supplier replenishment for ТОО «Электрокомплект», with IEK and Systeme Electric data.
 
 ## Assessment criteria
 
@@ -15,10 +15,10 @@ Adapted from the original `CLAUDE.md` and the user's latest decisions. `BUILD_PL
 
 ## Execution and scope
 
-- Latest data instruction (2026-09-23): use only the existing Railway production PostgreSQL; never start/use local PostgreSQL. Import IEK and Systeme Electric source workbooks losslessly, preserving every row/cell, original types, formula/cache/error distinctions and duplicates. Source ingestion performs no business filtering, deduplication, blank-to-zero inference or correction. Any later interpretation is separate from immutable source facts. See `docs/source-import.md`.
+- Data instruction (2026-09-23): real partner workbooks live only in Railway production PostgreSQL. The only local PostgreSQL is the Docker Compose `db` service for judges, seeded with synthetic `sample-data/`. Import IEK and Systeme Electric source workbooks losslessly, preserving every row/cell, original types, formula/cache/error distinctions and duplicates. Source ingestion performs no business filtering, deduplication, blank-to-zero inference or correction. Any later interpretation is separate from immutable source facts.
 
 - Codex is the main executor and uses subagents for independent bounded parallel tasks. Claude is not an execution dependency. Assign exclusive path ownership, communicate contract changes and preserve user/agent changes.
-- No time limits, time-based feature cuts or arbitrary feature freezes. Complete the retained scope using `BUILD_PLAN.md` acceptance gates.
+- No time limits, time-based feature cuts or arbitrary feature freezes. Complete the retained scope.
 - Use one Next.js App Router app, latest stable compatible Next.js/React, TypeScript, Node.js 24 LTS, Prisma/PostgreSQL and Railway. No monorepo, separate worker/queue, login/workspaces/roles, bucket or separate staging environment. Use PostgreSQL job status, named approvers and frozen approved revisions.
 - One owner manages dependency installation, lockfile, schema and shared contracts at a time. The engine is pure TypeScript; UI and agents call the same implemented services.
 - Partner files remain git-ignored. Committed deterministic synthetic workbooks use real adapters and explicit labels. Never place real customer identities or partner payloads in traces, fixtures or public demo artifacts.
@@ -36,9 +36,8 @@ Adapted from the original `CLAUDE.md` and the user's latest decisions. `BUILD_PL
 - Preserve signed raw facts, exact codes, provenance, missing-versus-zero distinction, scope and cutoff. Invoice IDs identify orders, never customers; overdue ETA never confirms receipt. Keep assumptions visible.
 - Enforce approval in application/database transactions with expected revision, named approver and required acknowledgements. Edits/recalculations invalidate active approval; exports use immutable approved revisions. AI cannot approve or send orders. Downloadable supplier/email drafts remain in scope.
 - Keep secrets server-side, validate boundaries, sanitize spreadsheet text and exclude sales/customer payloads from SDK traces/logs.
-- Write README/methodology as components land: purpose, algorithms/anomaly handling, data/assumptions, stack, install/run/env, clean-clone demo, main-scenario verification, tests, Railway and limitations.
+- Keep documentation in `README.md` and this file only; write it as components land: purpose, algorithms/anomaly handling, data/assumptions, stack, install/run/env, clean-clone demo, main-scenario verification, tests, Railway and limitations.
 - Verify in proportion to risk with meaningful behavioral/domain checks, integration checks and browser flow. Report actual evidence; do not claim accuracy, savings or deployment success without it.
-- Preserve original `CLAUDE.md` as a reference. Maintain only `BUILD_PLAN.md` as the implementation plan.
 
 <!-- BEGIN:nextjs-agent-rules -->
 

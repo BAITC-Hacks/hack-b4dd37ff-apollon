@@ -40,7 +40,7 @@ const unitLabel = (unit: string) => unit === "unknown" ? "ед. не указа�
 
 /**
  * Single-page procurement workspace: choose data -> validate -> calculate -> review -> adjust -> approve -> export.
- * Replaces the former sidebar-driven multi-page app (see UI_UX_REDESIGN_PROMPT.md).
+ * Replaces the former sidebar-driven multi-page app.
  */
 export function OrderWorkspace({ initialRoute, initialSku }: { initialRoute: Route; initialSku?: string }) {
   const { datasetId, dataset, datasets, details, loading: datasetsLoading, error: datasetError, selectDataset, refresh } = useWorkspace();
@@ -70,6 +70,8 @@ export function OrderWorkspace({ initialRoute, initialSku }: { initialRoute: Rou
   const [policy, setPolicy] = useState<Policy>(DEFAULT_POLICY);
   // Empty selection means "all suppliers".
   const [supplierScope, setSupplierScope] = useState<string[]>([]);
+  // Empty string means "all categories".
+  const [categoryScope, setCategoryScope] = useState("");
 
   // ---- Runs ----
   const [runsState, setRunsState] = useState<{ datasetId: string; runs: RunSummary[] }>({ datasetId: "", runs: [] });
@@ -116,6 +118,9 @@ export function OrderWorkspace({ initialRoute, initialSku }: { initialRoute: Rou
   const [confirmNewCalc, setConfirmNewCalc] = useState(false);
 
   const issues = useMemo(() => (details?.suppliers || []).flatMap(s => s.issues.map(i => ({ ...i, supplier: i.supplier || s.supplier }))), [details]);
+  const categoryOptions = useMemo(() => [...new Set((details?.suppliers || []).filter(s => !supplierScope.length || supplierScope.includes(s.supplier)).flatMap(s => s.categories))].sort(), [details, supplierScope]);
+  // Clamp instead of syncing via effect: a category scope that fell out of the (supplier-narrowed) option list is simply not sent.
+  const effectiveCategory = categoryScope && categoryOptions.includes(categoryScope) ? categoryScope : "";
   const blocking = issues.filter(i => i.severity === "error");
   const hasEdits = !!run && Object.keys(edits).length > 0;
 
@@ -184,7 +189,7 @@ export function OrderWorkspace({ initialRoute, initialSku }: { initialRoute: Rou
     if (!datasetId || calcBusy) return;
     setCalcBusy(true); setError(""); setSuccess("");
     try {
-      const result = await api<{ run: RunView }>("/api/runs", { method: "POST", body: JSON.stringify({ datasetId, policy, ...(supplierScope.length ? { suppliers: supplierScope } : {}) }) });
+      const result = await api<{ run: RunView }>("/api/runs", { method: "POST", body: JSON.stringify({ datasetId, policy, ...(supplierScope.length ? { suppliers: supplierScope } : {}), ...(effectiveCategory ? { category: effectiveCategory } : {}) }) });
       applyRun(result.run);
       addRun(result.run.datasetId, { id: result.run.id, createdAt: result.run.createdAt, baseRunId: null });
       navigate({ kind: "run", id: result.run.id });
@@ -391,6 +396,12 @@ export function OrderWorkspace({ initialRoute, initialSku }: { initialRoute: Rou
               <div className="procurement-scope">
                 <ChipSelect label="Поставщики" allLabel="Все поставщики" options={(details?.suppliers || []).map(s => ({ value: s.supplier, label: <><SupplierLogo supplier={s.supplier} size="sm"/><span className="sr-only">{supplierLabel(s.supplier)}</span></> }))}
                   value={supplierScope} onChange={setSupplierScope}/>
+                <label className="chip-select" aria-label="Категория"><span className="chip-select-label">Категория</span>
+                  <select value={effectiveCategory} onChange={e => setCategoryScope(e.target.value)} disabled={!categoryOptions.length}>
+                    <option value="">Все категории</option>
+                    {categoryOptions.map(c => <option key={c} value={c}>{categoryLabel(c)}</option>)}
+                  </select>
+                </label>
                 <button className="button primary" disabled={!datasetId || !details || calcBusy} onClick={() => void calculate()}>{calcBusy ? <span className="spinner"/> : <Play size={16} aria-hidden="true"/>} {calcBusy ? "Рассчитываем…" : run ? "Пересчитать заказ" : "Рассчитать заказ"}</button>
               </div>
               <section className="procurement-params" aria-labelledby="params-title">
