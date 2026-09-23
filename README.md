@@ -1,95 +1,264 @@
-# Apollon — планирование закупок
+# Apollon — автоматический расчёт заказов поставщикам
 
-**Current IEK and Systeme Electric import:** [lossless source import into Railway production PostgreSQL](docs/source-import.md). This preserves every source row/cell and original workbook bytes without interpretation. Docker contains no workbooks and performs no data seeding; development also connects to Railway production.
+> **Живая версия:** https://apollon-production-59ea.up.railway.app · проверка состояния: [`/api/health`](https://apollon-production-59ea.up.railway.app/api/health)
+>
+> Кейс HACKALEM AI от ТОО «Электрокомплект» (ekt.kz): «Автоматизация формирования заказов поставщикам».
 
-Explainable supplier replenishment for ТОО «Электрокомплект»: import IEK and Systeme Electric workbooks, review demand corrections and stock risk, calculate a purchase plan, approve a frozen revision, and download supplier drafts. The calculation is deterministic; an optional OpenAI assistant explains and invokes the same application services.
+### Быстрая проверка за 2 минуты (живая версия)
 
-**Status: single-page UI and lossless source import implemented.** `npm run typecheck`, `npm run lint`, `npm test` (105 checks) and `npm run build` all pass. The manager UI is now **one workspace with addressable URLs** (`/`, `/datasets/<id>`, `/runs/<id>`) (`components/order-workspace.tsx`) covering the full journey — choose data, validate, calculate, review, adjust, approve, export — with a checks/backtest/trends dialog and a history panel, replacing the earlier multi-page app. The old routes `/import`, `/plan`, `/data`, `/checks`, `/backtest`, `/trends` and `/plan/[runId]/sku/[code]` were removed and now 404; their logic lives in API routes (`/api/import`, `/api/runs`, `/api/checks`, `/api/backtest`, `/api/trends`, `/api/history`) called from the single page. A Railway deployment exists at **https://apollon-production-59ea.up.railway.app**; releases are manually uploaded and verified by exact deployment ID. See [Known limitations](#limitations-and-safety) for the full list, and [the runbook](docs/runbook.md) for current deployment/data status.
+1. Откройте https://apollon-production-59ea.up.railway.app и выберите набор **«IEK и Systeme Electric — исходные данные кейса»**.
+2. Выберите поставщика и нажмите **«Рассчитать заказ»**. Затем откройте **«Почему»** у любой строки, **утвердите** заказ и скачайте **XLSX / CSV / письмо**.
+3. Весь сценарий одним запросом — расчёт, проверка 5 обязательных требований и топ-50 срочных позиций с объяснениями: https://apollon-production-59ea.up.railway.app/api/quick-test?limit=50
 
-## Run from a clean checkout
+**Запуск из репозитория:** `docker compose up --build` → http://localhost:3000 (синтетические данные загружаются автоматически). Подробнее — в [разделе 7](#7-установка-и-запуск).
 
-Use Node 24 LTS. PostgreSQL runs only in the existing Railway production service. Authenticate the Railway CLI, link this repository to its existing project, and register an SSH key for private access.
+## 1. Проблема и для кого
+
+Менеджер отдела закупа «Электрокомплекта» сейчас считает пополнение склада вручную в Excel. Поэтому расчёт делают редко. По одним позициям копятся излишки, по другим возникает дефицит. Кроме того, разовые крупные продажи искажают оценку регулярного спроса.
+
+**Apollon** — веб-сервис для менеджера по закупкам. Сервис:
+
+1. Загружает выгрузки поставщиков **IEK** и **Systeme Electric** в исходном формате `.xlsx`.
+2. Прогнозирует спрос с учётом сезонности, устойчивого роста, упущенного спроса и разовых выбросов.
+3. Выдаёт список рекомендованных заказов, сгруппированный по поставщикам. У каждой позиции есть объяснение и срочность.
+4. Позволяет скорректировать количество, утвердить заказ с указанием ответственного и выгрузить черновик заказа для поставщика.
+
+**Заказы никогда не отправляются автоматически.** Сервис только готовит черновик. Решение принимает человек, как и требуют ограничения кейса.
+
+## 2. Что реализовано
+
+### Обязательные требования кейса (Must have)
+
+| # | Требование кейса | Как реализовано | Где в коде |
+|---|---|---|---|
+| 1 | Базовая потребность по каждому артикулу с учётом всех источников данных | Горизонт = срок поставки + период пересмотра. В расчёте участвуют прогноз спроса, страховой запас, свободный остаток, поставки в пути (по дате ETA), категория (уровень сервиса) и коэффициент роста. Затем применяются MOQ и кратность упаковки. | `lib/engine/index.ts` |
+| 2 | Сезонность и устойчивый рост | Для каждого товара строится сезонный профиль, который сжимается к групповому профилю. Тренд Theil–Sen оценивается на сезонно скорректированных данных, годовой рост ограничен ±50%. Коэффициент роста от поставщика или менеджера заменяет оценённый тренд. | `lib/engine/index.ts`, `lib/engine/math.ts` |
+| 3 | Оценка и компенсация упущенного спроса при stockout | Доступность товара оценивается по пустым остаткам и продажам ниже нормы. Подтверждённые интервалы дефицита имеют приоритет. Формула: упущенный спрос = ожидаемый × (1 − доступность). Для оценки выводится диапазон ±0,25. | `lib/engine/index.ts` |
+| 4 | Выявление и исключение разовых крупных заказов | Счёт считается выбросом, если превышает `max(median + 6·MAD·1.4826, Q3 + 3·IQR, 3 × сезонная норма)` и занимает не менее 30% месяца. Устойчивый рост не отбрасывается. Вычитание разрешено, только если сумма счетов сходится с месячным отчётом (допуск 5%). Для обезличенного `customerId` есть проверка концентрации на одного клиента за 60 дней. | `lib/engine/index.ts` |
+| 5 | Итоговый список по поставщикам с обоснованием | Таблица сгруппирована по поставщикам. У каждой строки есть кнопка «Почему», которая показывает спрос, остаток, поступления, округление и допущения. | `components/order-workspace.tsx`, `components/sku-detail.tsx` |
+
+### Опциональные пункты кейса и дополнительные возможности
+
+- **Приоритизация по риску дефицита:** срочность строки, дата первого дефицита и число дней покрытия.
+- **MOQ и условия поставщика:** минимальная партия, кратность упаковки и пересчёт единиц (например, метры в бухты).
+- **Тренды спроса по категориям:** отдельный дашборд и `GET /api/trends`.
+- **Выгрузка заказа:** XLSX, CSV (разделитель `;`, BOM для Excel) и текстовый черновик письма поставщику. Автоматической рассылки нет, это сделано намеренно.
+- **Утверждение с ревизиями.** Утверждённая версия замораживается, а любая правка снимает утверждение. Экспорт всегда строится из замороженной ревизии.
+- **Историческая проверка (backtest):** прогноз заново строится на срезах 31.05, 30.06 и 31.07.2026 и сравнивается с двумя базовыми моделями: «тот же месяц прошлого года» и «среднее за 12 месяцев». Метрики: MAE, WAPE и средняя ошибка со знаком.
+- **Встроенные проверки кейса:** диалог «Проверка расчёта» и `POST /api/checks` проверяют каждое Must-have-требование на реальных данных.
+- **ИИ-помощник на OpenAI Agents SDK.** Помощник объясняет расчёт и вызывает те же серверные сервисы, что и интерфейс. Утвердить или отправить заказ он не может (подробности в разделе 6).
+
+## 3. Как работает решение: сценарий пользователя
+
+```
+Excel-выгрузки → проверка и архив в PostgreSQL → расчёт → обзор «Почему» → корректировка → утверждение → экспорт XLSX/CSV/письмо
+```
+
+1. **Выбор данных (`/`).** Менеджер загружает до шести отчётов поставщика: продажи, остатки, товары в пути, MOQ/кратность, динамика продаж и сезонность. Можно также выбрать уже сохранённый набор данных кейса. Файлы распределяются по слотам по имени. Нераспознанные файлы и файлы не в формате `.xlsx` явно отклоняются.
+2. **Проверка (`/datasets/<id>`).** Показываются покрытие данных, предупреждения импорта и отсутствующие отчёты. Менеджер выбирает поставщика и при необходимости меняет политику в расширенных настройках: срок поставки, уровень сервиса и так далее.
+3. **Расчёт.** Нажатие «Рассчитать заказ» запускает детерминированный движок. Результат сохраняется как отдельный расчёт (`/runs/<id>`).
+4. **Обзор.** Рекомендации сгруппированы по поставщику и выводятся по 100 строк на страницу. В каждой строке есть артикул, количество, срочность, уверенность и кнопка «Почему». Объяснение показывает прогноз, остаток, поступления, исключённые выбросы, упущенный спрос и округление. Неизвестные факты помечаются явно, а не подменяются.
+5. **Корректировка и утверждение.** Менеджер меняет количества, указывает ответственного и подтверждает допущения. После этого создаётся замороженная ревизия.
+6. **Экспорт.** Менеджер скачивает XLSX, CSV или черновик письма поставщику.
+
+У каждого состояния есть свой URL (`?sku=<key>` открывает объяснение), поэтому ссылкой можно поделиться, а кнопки браузера «Назад» и «Вперёд» работают.
+
+## 4. Технологии
+
+| Слой | Технологии |
+|---|---|
+| Язык / среда | TypeScript, Node.js 24 (`engines: >=22.12 <25`) |
+| Веб-приложение | Next.js 16 (App Router, API routes), React 19, Tailwind CSS 4, Recharts, lucide-react |
+| Расчётный движок | Чистые функции на TypeScript (`lib/engine`), без внешних ML-библиотек |
+| База данных | PostgreSQL на Railway, Prisma 7 (`@prisma/adapter-pg`), миграции в `prisma/migrations` |
+| Разбор Excel | Собственный потоковый парсер OOXML (`jszip` + `saxes`) для импорта без потерь; `exceljs` для генерации XLSX |
+| ИИ | **OpenAI Agents SDK** (`@openai/agents`): tools, handoff, input/output guardrails; модель задаётся через `OPENAI_MODEL` |
+| Валидация | `zod` для всех входов API |
+| Тесты и CI | Vitest, ESLint 9, GitHub Actions (`.github/workflows/ci.yml`) |
+| Деплой | Docker (multi-stage, `node:24-alpine`, непривилегированный пользователь), Railway |
+
+## 5. Архитектура
+
+```
+ Браузер (одна страница, адресуемые URL)
+   │  components/order-workspace.tsx  ─ загрузка, расчёт, обзор, утверждение, экспорт
+   │  components/workspace.tsx        ─ панель ИИ-помощника
+   ▼
+ Next.js API routes (app/api/*)       ─ zod-валидация, rate limit, защита от cross-origin
+   │   import · datasets · runs · orders/[id]/approve · export · checks · backtest · trends · agent · health
+   ├──► lib/ingest     ─ парсинг XLSX без потерь + версионированное сопоставление с моделью планирования
+   ├──► lib/engine     ─ детерминированный расчёт: очистка → доступность → сезонность/рост → запас → MOQ
+   ├──► lib/export     ─ XLSX / CSV / письмо (с защитой от формульных инъекций)
+   ├──► lib/agent      ─ OpenAI Agents SDK: ProcurementCopilot + AnomalyReviewer
+   └──► lib/repo + lib/db ─ Prisma → PostgreSQL (Railway)
+```
+
+**Слои данных в PostgreSQL** (`prisma/schema.prisma`):
+
+1. **Неизменяемый архив источника:** `SourceWorkbook`, `SourceSheet`, `SourceRow`. Здесь хранятся исходные байты файла, SHA-256, каждая физическая строка и ячейка, включая заголовки, итоги и пустые строки. Ничего не фильтруется и не «исправляется».
+2. **Версионированное сопоставление:** из архива строится набор данных для планирования (`Dataset`, `Product` и др.). В манифесте набора записаны ID и хэши исходных книг.
+3. **Результаты:** расчёты, заказы, ревизии и неизменяемые снимки утверждений.
+
+**Принцип:** математика не зависит ни от LLM, ни от БД. `calculatePlan()` — чистая функция. Поэтому один и тот же вход всегда даёт один и тот же результат, и движок покрыт тестами без базы данных.
+
+## 6. ИИ-помощник (OpenAI Agents SDK)
+
+Файлы: `lib/agent/index.ts`, `lib/agent/guardrails.ts`, `app/api/agent/route.ts`. В интерфейсе это кнопка «Ассистент». В открытом расчёте она предлагает три вопроса по первым десяти рекомендациям; нажатие отправляет вопрос агенту.
+
+- **Агент `ProcurementCopilot`** имеет 6 инструментов, и все они вызывают настоящие сервисы приложения:
+  - `inspect_data_quality`
+  - `calculate_replenishment` (создаёт только черновик расчёта)
+  - `explain_sku`
+  - `compare_scenario` (реальные дельты движка при изменённой политике)
+  - `list_anomalies`
+  - `draft_supplier_order` (новый черновик, без утверждения)
+- **Handoff на `AnomalyReviewer`:** специализированный агент разбирает спорные разовые продажи.
+- **Guardrails.** Входной guardrail блокирует попытки деанонимизации клиентов. Выходной guardrail блокирует ответы, которые утверждают или отправляют заказ. Ответ сначала буферизуется и отдаётся клиенту только после того, как выходной guardrail его пропустил.
+- **Приватность.** В модель передаются только агрегаты расчёта: без сырых транзакций, ID клиентов и номеров счетов.
+- **Без ключа.** Если `OPENAI_API_KEY` не задан, помощник честно сообщает, что недоступен. Расчёт, проверки, утверждение и экспорт работают без ключа.
+
+## 7. Установка и запуск
+
+Основной способ запустить проект из чистого checkout — **Docker Compose**. Нужен только Docker: аккаунт Railway, доступ к нашей базе и ключ OpenAI не требуются.
+
+### A. Полный запуск одной командой (рекомендуется)
+
+```sh
+git clone <этот репозиторий> apollon && cd apollon
+docker compose up --build
+```
+
+Что происходит:
+
+1. `db` поднимает PostgreSQL 17 (порт `5433` на хосте, чтобы не конфликтовать с локальным Postgres).
+2. `setup` применяет миграции (`prisma migrate deploy`) и запускает `npm run seed:sample`. Скрипт импортирует 12 синтетических книг из `sample-data/` через тот же код, что и загрузка в интерфейсе (`parseRawWorkbook` → `saveRawWorkbook` → `materializeSourceDataset`). Готовых результатов в сиде нет: расчёт выполняется в приложении. Повторный запуск идемпотентен.
+3. `app` запускается на http://localhost:3000, когда `setup` успешно завершился.
+
+Откройте http://localhost:3000, выберите набор **«Синтетические данные sample-data — IEK и Systeme Electric»** и пройдите сценарий из [раздела 8](#8-как-проверить-решение-сценарий-для-жюри).
+
+ИИ-помощник по желанию: `OPENAI_API_KEY=sk-... docker compose up --build`. Без ключа всё остальное работает.
+
+Остановить: `docker compose down`. Удалить и данные: `docker compose down -v`.
+
+### B. Без Docker (Node.js 24 + любой PostgreSQL)
 
 ```sh
 npm ci
 npm run db:generate
-npm run dev
+cp .env.example .env
+# в .env: DATABASE_URL=postgresql://apollon:apollon@localhost:5433/apollon и APOLLON_LOCAL_DB=1
+npm run db:migrate
+npm run seed:sample
+npx next dev          # http://localhost:3000
 ```
 
-Open http://localhost:3000. The wrapper uses an authenticated temporary SSH relay to Railway PostgreSQL; it does not start a local database. Database-free checks are `npm test`, `npm run typecheck` and `npm run build`. `OPENAI_API_KEY` and `OPENAI_MODEL` configure the optional assistant only.
+База для этого варианта поднимается командой `docker compose up -d db` либо используется своя. `APOLLON_LOCAL_DB=1` явно разрешает подключение к базе вне Railway: без этого флага `lib/db.ts` принимает только хосты Railway, чтобы команда случайно не работала с чужой базой.
 
-Migrations and source imports are explicit operations documented in [source import](docs/source-import.md). Startup never seeds data. Docker packages application code only; the previous local database/Compose setup has been removed.
+> `npm run dev` — служебный скрипт команды. Он подключается к production-базе через Railway CLI и SSH, поэтому жюри он не нужен.
 
-## Manager walkthrough
-
-The procurement manager works in one workspace. Every state has its own URL: `/` (choose data), `/datasets/<id>` (validate + calculate), `/runs/<id>` (a saved calculation) and `?sku=<key>` (an open explanation). Links can be shared, reloaded and navigated with browser Back/Forward.
-
-1. On `/`, either **upload your own reports** or pick a saved case dataset. The upload card has six labelled slots, one per partner report: monthly sales, monthly stock, goods in transit, MOQ/multiples, sales dynamics and seasonality. Dropping several files at once assigns each file to a slot by its name. Unrecognised names and non-`.xlsx` files are reported, never guessed. Missing reports do not block the upload; the data check flags them. Then pick one or more suppliers (chips; none = all) and click **«Рассчитать заказ»**. The calculation parameters sit on the right of the card, always visible: lead time, annual growth, minimum stock days, and the stockout-compensation / one-off-order exclusion switches. Category service levels are applied automatically from the engine defaults.
-2. Review recommendations grouped by supplier: article, quantity, urgency/confidence and **«Почему»** (or click the product name), 100 rows per page. The explanation shows demand, stock, expected arrivals, rounding and assumptions. Unknown facts remain explicit.
-3. Adjust order quantities, approve with a named responsible person and acknowledge required estimates. Edits invalidate approval; exports use the frozen approved revision.
-4. Download XLSX/CSV or an email draft. The app never dispatches orders automatically.
-
-**«Просмотреть данные»** opens source files, categories and diagnostic details. Verification/backtest/trends and history are secondary views; counts and import warnings do not fill the opening screen. **«Изменить / загрузить отчёты»** (or **«Новый расчёт»**) returns to `/`. Uploads archive the source before interpreting its PostgreSQL rows. Copilot is optional and cannot approve or send orders.
-
-## Data in PostgreSQL
-
-All twelve original workbooks are preserved in Railway production PostgreSQL in `SourceWorkbook`, `SourceSheet` and `SourceRow`, including headers, totals, hidden/empty rows and repeated entries:
-
-| Supplier | Workbooks | Sheets | Physical rows | Cells |
-| --- | ---: | ---: | ---: | ---: |
-| IEK | 6 | 6 | 181,547 | 1,585,736 |
-| Systeme Electric | 6 | 8 | 79,720 | 699,779 |
-| Total | 12 | 14 | 261,267 | 2,285,515 |
-
-Every file's original bytes and every projected row/cell passed database read-back verification. Independent Python OOXML inventories matched the TypeScript parser for all twelve workbooks.
-
-These are immutable **raw source records**. A separately versioned mapping reads their PostgreSQL rows into the planning dataset, with archive IDs and hashes in its manifest. The case selector uses this derived dataset; synthetic and legacy datasets are excluded. No original source rows are filtered, merged, corrected or inferred.
+### C. Проверки без базы данных
 
 ```sh
-npm run import -- --supplier IEK --file "case and data/IEK/MOQ  ИЭК.xlsx" --write
+npm ci && npm run db:generate
+npm run typecheck && npm run lint && npm test && npm run build
 ```
 
-This command is idempotent and verifies an existing identical archive rather than inserting it twice. See [the preservation contract and SQL examples](docs/source-import.md). Partner workbooks and private audit artifacts are excluded from Git, Docker and Railway directory uploads; originals are retained as private database bytes for fidelity, alongside queryable rows.
+`npm test`: все тесты проходят, 9 интеграционных пропускаются без `DATABASE_URL`. Эти же шаги выполняет CI (`.github/workflows/ci.yml`) на каждый push.
 
-Committed `sample-data/` files are deterministic synthetic **test fixtures only**. The Docker copy, demo-seed script, startup seeding and demo-load HTTP action have been removed. The UI lists saved calculation datasets from PostgreSQL and can refresh that list; it never loads bundled workbooks.
+### Переменные окружения
 
-## Calculation and architecture
+| Переменная | Обязательна | Назначение |
+|---|---|---|
+| `DATABASE_URL` | да (для UI/API) | PostgreSQL. В Docker Compose задана автоматически. |
+| `APOLLON_LOCAL_DB` | для не-Railway базы | `1` разрешает локальную/свою базу. |
+| `OPENAI_API_KEY` | нет | Включает ИИ-помощника. Используется только на сервере. |
+| `OPENAI_MODEL` | нет | Модель агента. По умолчанию `gpt-5.6-terra`. |
 
-One Next.js App Router application, TypeScript, Node 24, Prisma/PostgreSQL, ExcelJS, Tailwind, TanStack Table and Recharts. Tested dependencies are pinned in `package-lock.json`; the application uses the stable Prisma 7 line and its PostgreSQL adapter. No worker, queue or separate Python service is required.
+## 8. Как проверить решение (сценарий для жюри)
 
-`Excel → immutable PostgreSQL source archive → versioned planning mapping → pure TypeScript engine → persisted run → revisioned approval → frozen export`
+### Быстрая проверка на живой версии
 
-- Monthly reports are the demand source; transactions provide invoice evidence and are never added again. Signed returns and source provenance are retained.
-- One-off filtering requires sufficient prior invoice evidence and reconciliation with the monthly report. Deseasonalized monthly checks and persistence guards protect seasonality and sustained growth.
-- Interior blank stock observations can mean inferred zero within a product's observed stock span; outside it, stock remains unknown. Stockout compensation distinguishes estimated and confirmed intervals and exposes uncertainty.
-- Forecasts use seasonal profiles, robust growth, category-dependent service/safety policies, dated demand and inbound, then MOQ/pack conversion and rounding. Metres and pieces are not summed for ABC ranking; Systeme value ranking uses its cost field.
-- Backtests refit at historical cutoffs and compare against seasonal-naive and mean baselines. Current partial September is not a completed training or test month.
-- PostgreSQL stores source hashes/audit, product facts, policy, results, order revisions and immutable approval snapshots. Job rows record awaited operations; they are not a durable background queue.
+1. Откройте https://apollon-production-59ea.up.railway.app. Выберите сохранённый набор **«IEK и Systeme Electric — исходные данные кейса»**.
+2. Выберите поставщика и нажмите **«Рассчитать заказ»**.
+3. Откройте **«Почему»** у любой строки. Вы увидите прогноз по месяцам, сезонные коэффициенты, остаток, поступления в горизонте, исключённые выбросы, упущенный спрос и шаги округления до MOQ и кратности.
+4. Измените количество в строке, введите имя ответственного и **утвердите** заказ. Затем скачайте **XLSX / CSV / письмо**. Попробуйте изменить строку после утверждения: утверждение снимется.
+5. Откройте **«Проверка расчёта»** и посмотрите вкладки проверок кейса, backtest и трендов.
 
-See [methodology](docs/methodology.md), the [single build plan](BUILD_PLAN.md), and the [operational runbook](docs/runbook.md) for formulas, assumptions, release checks and recovery.
+### Один запрос — весь сценарий: `GET /api/quick-test`
 
-## Verification and deployment
+Откройте в браузере или через `curl`:
+
+- локально: http://localhost:3000/api/quick-test?limit=50
+- живая версия: https://apollon-production-59ea.up.railway.app/api/quick-test?limit=50
+
+При каждом запросе сервер заново загружает набор данных из базы, запускает детерминированный движок (`calculatePlan`) и проверки кейса (`runCaseChecks`), а затем возвращает JSON. В базу ничего не сохраняется. В ответе:
+
+- `mustHave` — 5 обязательных требований кейса: `passed` и доказательство (пример артикула и числа);
+- `summary` — число рекомендаций, разбивка по поставщикам и срочности, аномалии, упущенный спрос;
+- `top` — до `limit` самых срочных позиций: артикул, поставщик, количество, срочность, покрытие в днях и объяснение «почему».
+
+Параметры: `limit` (1–200, по умолчанию 50), `supplier` (`IEK` | `SE`), `datasetId`. Некорректные параметры возвращают понятную ошибку 400.
+
+### Проверка через API
 
 ```sh
-npm run typecheck
-npm run lint
-npm test
-npm run build
+BASE=https://apollon-production-59ea.up.railway.app   # или http://localhost:3000
+curl -s $BASE/api/health
+curl -s $BASE/api/datasets            # список наборов, взять id
+curl -s -X POST $BASE/api/checks -H "Content-Type: application/json" -H "Origin: $BASE" \
+  -d '{"datasetId":"<id>"}'
 ```
 
-All four commands pass (Prisma client generation, Next.js/Turbopack build, ESLint 9). `npm test` runs 96 database-free tests and skips 9 integration tests unless DATABASE_URL is explicitly supplied. All 9 integration tests also pass through `npx tsx scripts/with-production-db.ts node_modules/.bin/vitest run tests/repo/repo.test.ts`; this suite removes only its own synthetic test records. GitHub Actions is configured to run the same checks on pushes and pull requests.
+На наборе данных кейса ответ `/api/checks` на момент написания содержит:
 
-**Deployment:** a live instance runs at **https://apollon-production-59ea.up.railway.app** (health check at `/api/health`). Railway's `railway.json` Config-as-Code is deprecated and not applied by the platform; the service's Dockerfile path, pre-deploy command, healthcheck path and restart policy were instead set directly in the Railway service settings (mirroring the values in `railway.json` for reference). The pre-deploy command is migration-only (`npm run db:migrate`); automatic data seeding has been removed. See [the runbook](docs/runbook.md) for full current deployment status. Judges should primarily verify by running the project locally (below); the live link is a bonus, not a substitute.
+- **6 из 6 проверок пройдено:**
+  - влияние остатка и ETA;
+  - учёт всех входов;
+  - найден сезонный товар;
+  - найден пример упущенного спроса;
+  - найден пример разовой продажи;
+  - у каждой строки есть обоснование.
+- **Сводка `realChecks`:**
+  - 3 909 рекомендаций;
+  - все количества конечные и неотрицательные;
+  - все строки с объяснением;
+  - 808 помеченных аномалий;
+  - 404 товара с оценённым упущенным спросом.
 
-## Limitations and safety
+### Проверка обязательных требований тестами
 
-- **UI is one page; verification tools live in dialogs, not separate screens.** The manager workspace is entirely on `/`; checks/backtest/trends are reached through the in-page **«Проверка расчёта»** dialog or directly via `GET /api/checks`, `GET /api/backtest`, `GET /api/trends`. SKU-level provenance is reached through the row drawer or directly via `GET /api/runs/[id]` (which carries each recommendation's full history/projection/anomalies).
-- **Source facts and planning interpretation are separate.** The application uses a versioned PostgreSQL-derived dataset; source errors, missing categories and stock assumptions remain visible.
-- This is a shared, unauthenticated demonstration. An approver's typed name is attribution, not verified identity. **Do not upload confidential partner data to the public instance.** Dataset IDs are not access controls.
-- Real files have no customer IDs. Invoice numbers identify orders, not people or customers. Customer-concentration detection is demonstrated only with labelled synthetic customer IDs.
-- Real stockouts and IEK current balances are estimates. Overdue ETAs are not receipts; unknown stock requires review. Lost-sales values are estimates, not measured recovery or revenue.
-- Warehouse scope is incomplete; category meanings, measured lead times and some unit conversions need partner confirmation. Defaults and overrides must remain visible.
-- Monthly and transaction reports do not always reconcile. Monetary seasonality is comparison-only. The supplied Systeme “12 months” formula spans 13 months and is not trusted as a forecast input.
-- Supplier exports are review drafts; the actual 1C import contract is unverified. Spreadsheet text is sanitized against formula injection.
-- Partner workbooks, credentials and generated files are git-ignored. AI tracing excludes sensitive inputs/outputs; API keys remain server-side. An assistant cannot approve or dispatch orders.
-- In-flight work is not resumed automatically after a restart. Frozen completed data survives in PostgreSQL. Do not claim forecast superiority, purchasing savings or real lost-sales recovery without appropriate ground truth.
+`npm test` прогоняет `tests/engine/engine.test.ts` и другие тесты:
+
+- изменение остатка, товаров в пути, роста или категории меняет итог;
+- сезонный товар получает сезонный, а не средний прогноз;
+- stockout увеличивает потребность;
+- искусственно добавленный заказ объёмом в 50 месячных норм меняет базовый спрос менее чем на 5%.
+
+## 9. Данные и интеграции
+
+- **Данные кейса.** Это 12 книг `.xlsx` (по 6 на IEK и Systeme Electric) в исходных форматах партнёра. Они загружены в PostgreSQL на Railway через импорт без потерь (`scripts/import-source.ts`, [docs/source-import.md](docs/source-import.md)). **Файлы партнёра в Git не хранятся.**
+- **`sample-data/`** содержит **синтетические** книги с той же структурой листов и русскими заголовками, что у партнёра: 24 вымышленных товара на поставщика, история с января 2024 по сентябрь 2026. Каждый артикул моделирует свой сценарий: сезонность, рост, stockout, разовый счёт в 50 норм, концентрацию на одного клиента, пересчёт метров в бухты, MOQ, возвраты, битые ячейки. Полный список — в [sample-data/README.md](sample-data/README.md). Файлы воспроизводимо генерируются командой `npm run demo:generate`.
+- **Внешние сервисы:**
+  - Railway: хостинг и PostgreSQL;
+  - OpenAI API через Agents SDK: только для помощника, по желанию.
+
+  Других интеграций нет. Загрузки в 1С и отправки писем тоже нет.
+
+## 10. Ограничения (известные нам)
+
+- **Нет аутентификации.** Это общая демонстрационная версия. Имя утверждающего — подпись, а не проверенная личность. Не загружайте конфиденциальные данные в публичный экземпляр.
+- **Локальный запуск использует синтетические данные** из `sample-data/`: реальные выгрузки партнёра в репозиторий не входят. Реальные данные кейса доступны только в живой версии.
+- **В реальных выгрузках нет ID клиентов.** Поэтому проверка концентрации продаж на одном клиенте показана только на синтетических данных с `anonymized_customer_id`. На реальных данных разовые продажи выявляются по счетам и месячным рядам.
+- **Stockout и упущенный спрос — оценки.** Периодов отсутствия товара в данных партнёра нет. Доступность выводится из остатков и продаж, диапазон ±0,25 — сценарный, а не доверительный интервал.
+- **Смысл категорий 1/2/3/5/7 партнёр не раскрыл.** Уровни сервиса по категориям — явные редактируемые допущения. Реальные сроки поставки тоже неизвестны, по умолчанию стоит 45 дней.
+- **Формат импорта в 1С не подтверждён.** Экспорт — это черновик для проверки, а не проверенный контракт загрузки.
+- **Месячные отчёты и транзакции сходятся не всегда.** При расхождении больше 5% счёт не вычитается, вместо этого применяется месячный фильтр выбросов.
+- **Незавершённые операции не возобновляются после перезапуска.** Сохранённые расчёты и утверждения остаются в БД.
+- **Экономия не измерена.** Backtest сравнивает точность прогноза с базовыми моделями, но экономию на закупках и восстановленные продажи мы не заявляем: для этого нет фактических данных.
+
+## 11. Документация и ссылки
+
+- **Живая версия:** https://apollon-production-59ea.up.railway.app
+- [docs/methodology.md](docs/methodology.md): полная методика расчёта, формулы и все константы движка.
+- [docs/source-import.md](docs/source-import.md): контракт импорта без потерь и SQL-примеры.
+- [docs/runbook.md](docs/runbook.md): деплой и эксплуатация.

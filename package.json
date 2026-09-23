@@ -19,6 +19,7 @@
     "db:dev": "prisma migrate dev",
     "demo:generate": "tsx scripts/make-demo-data.ts",
     "import": "tsx scripts/import-source.ts",
+    "seed:sample": "tsx scripts/seed-sample.ts",
     "test:e2e": "playwright test"
   },
   "dependencies": {
