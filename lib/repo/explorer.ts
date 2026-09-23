@@ -10,8 +10,8 @@ export interface StockRow { code: string; article: string; name: string; unit: s
 export interface TxnRow { code: string; article: string; name: string; unit: string; date: string; invoice: string; quantity: number; warehouse: string | null }
 export interface DeliveryRow { code: string; article: string; name: string; unit: string; quantity: number; eta: string; orderDate: string | null; receivedDate: string | null }
 
-function clampPage(page?: number) { return Math.max(0, Math.floor(page ?? 0)); }
-function clampSize(pageSize?: number) { return Math.min(200, Math.max(1, Math.floor(pageSize ?? 50))); }
+function clampPage(page?: number) { const n = Math.floor(page ?? 0); return Number.isFinite(n) ? Math.max(0, n) : 0; }
+function clampSize(pageSize?: number) { const n = Math.floor(pageSize ?? 50); return Number.isFinite(n) ? Math.min(200, Math.max(1, n)) : 50; }
 
 export interface ExplorerFilter { datasetId: string; supplier?: string; search?: string }
 
