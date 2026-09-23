@@ -100,6 +100,9 @@ Live (Railway, using the mapped case dataset): repeat steps 1–6 against https:
 
 ## Recovery and troubleshooting
 
+- Stop local development with **Ctrl+C in the terminal running `npm run dev`**. The production wrapper forwards the signal to the Next.js CLI and closes its SSH relay after the command exits.
+- If Next.js reports another dev server but the browser refuses connections, inspect the reported PID and its parent. A server can stop listening while still holding `.next/dev/lock` during shutdown. Stop the verified Next.js CLI parent for this repository; do not delete a lock held by a live process or kill unrelated Node processes. Restart with `npm run dev` (normally http://localhost:3000).
+
 - Failed build: inspect build logs for the exact deployment; reproduce `npm ci`, generation and build on Node 24.
 - Failed pre-deploy: inspect migration logs. Do not reset or drop the database. Fix forward with a reviewed migration or parser change.
 - Health 503: verify app database reference, PostgreSQL status and private networking. Do not print credentials into logs.
