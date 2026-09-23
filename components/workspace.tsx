@@ -37,12 +37,14 @@ export function LoadingState({ text = "Загружаем данные…" }: { 
 export function Metric({ label, value, detail, tone = "" }: { label: string; value: ReactNode; detail?: string; tone?: string }) { return <div className={`metric ${tone}`}><span>{label}</span><strong>{value}</strong>{detail && <small>{detail}</small>}</div>; }
 
 const links = [
-  { href: "/plan", label: "План закупок", icon: LayoutDashboard },
-  { href: "/import", label: "Источники данных", icon: Database },
-  { href: "/trends", label: "Динамика спроса", icon: BarChart3 },
-  { href: "/backtest", label: "Качество прогноза", icon: Layers3 },
-  { href: "/checks", label: "Проверки сценария", icon: CheckCheck },
+  { href: "/", label: "Дашборд", icon: LayoutDashboard },
+  { href: "/plan", label: "Расчёт заказов", icon: Sparkles },
+  { href: "/data", label: "Данные", icon: Database },
+  { href: "/checks", label: "Проверки", icon: CheckCheck },
+  { href: "/backtest", label: "Бэктест", icon: Layers3 },
+  { href: "/trends", label: "Тренды", icon: BarChart3 },
 ];
+function isActive(pathname: string, href: string) { return href === "/" ? pathname === "/" : pathname.startsWith(href); }
 
 export function Workspace({ children }: { children: ReactNode }) {
   const pathname = usePathname();
@@ -63,7 +65,18 @@ export function Workspace({ children }: { children: ReactNode }) {
     } catch (e) { setError(e instanceof Error ? e.message : "Не удалось загрузить наборы"); }
     finally { setLoading(false); }
   }, [selectDataset]);
-  useEffect(() => { void refresh(); }, [refresh]);
+  useEffect(() => {
+    const controller = new AbortController();
+    api<{ datasets: DatasetSummary[] }>("/api/datasets", { signal: controller.signal })
+      .then(result => {
+        setDatasets(result.datasets);
+        const preferred = localStorage.getItem("apollon.dataset");
+        selectDataset(result.datasets.find(d => d.id === preferred)?.id || result.datasets[0]?.id || "");
+      })
+      .catch(e => { if (!controller.signal.aborted) setError(e instanceof Error ? e.message : "Не удалось загрузить наборы"); })
+      .finally(() => { if (!controller.signal.aborted) setLoading(false); });
+    return () => controller.abort();
+  }, [selectDataset]);
   useEffect(() => {
     if (!datasetId) return;
     const controller = new AbortController();
@@ -78,10 +91,10 @@ export function Workspace({ children }: { children: ReactNode }) {
       <Link className="brand" href="/plan" onClick={() => setMobileOpen(false)}><span className="brand-mark">A<span/></span><span>apollon<small>INTELLIGENT PROCUREMENT</small></span></Link>
       <div className="sidebar-workspace"><span className="workspace-avatar">ЭК</span><div><strong>Электрокомплект</strong><small>Закупки · Алматы</small></div><PanelLeftClose size={16}/></div>
       <div className="nav-caption">РАБОЧЕЕ ПРОСТРАНСТВО</div>
-      <nav aria-label="Основная навигация">{links.map(({ href, label, icon: Icon }) => <Link key={href} href={href} onClick={() => setMobileOpen(false)} className={`nav-link ${pathname.startsWith(href) ? "active" : ""}`} aria-current={pathname.startsWith(href) ? "page" : undefined}><Icon size={19}/>{label}{href === "/plan" && <span className="nav-dot"/>}</Link>)}</nav>
+      <nav aria-label="Основная навигация">{links.map(({ href, label, icon: Icon }) => <Link key={href} href={href} onClick={() => setMobileOpen(false)} className={`nav-link ${isActive(pathname, href) ? "active" : ""}`} aria-current={isActive(pathname, href) ? "page" : undefined}><Icon size={19}/>{label}{href === "/plan" && <span className="nav-dot"/>}</Link>)}</nav>
       <div className="sidebar-bottom"><div className="sidebar-note"><Sparkles size={20}/><strong>Решения с обоснованием</strong><p>От истории спроса до заказа. Каждый расчёт можно проверить.</p></div><Link href="/checks" className="sidebar-help"><CircleHelp size={17}/> Методология и проверки <ArrowUpRight size={15}/></Link><div className="sidebar-foot">APOLLON <span>·</span> PROCUREMENT INTELLIGENCE</div></div>
     </aside>
-    <div className="workspace-main"><header className="topbar"><div className="topbar-breadcrumb"><button className="icon-button mobile-menu" aria-label="Открыть навигацию" onClick={() => setMobileOpen(true)}><Menu size={20}/></button><span>Рабочее пространство</span><span className="slash">/</span><strong>{links.find(l => pathname.startsWith(l.href))?.label || "Обзор"}</strong></div><div className="topbar-right"><span className="warehouse-label"><span className="status-dot"/> Алматы</span><div className="user-avatar" title="Менеджер закупок">МЗ</div></div></header>
+    <div className="workspace-main"><header className="topbar"><div className="topbar-breadcrumb"><button className="icon-button mobile-menu" aria-label="Открыть навигацию" onClick={() => setMobileOpen(true)}><Menu size={20}/></button><span>Рабочее пространство</span><span className="slash">/</span><strong>{links.find(l => isActive(pathname, l.href))?.label || "Обзор"}</strong></div><div className="topbar-right"><span className="warehouse-label"><span className="status-dot"/> Алматы</span><div className="user-avatar" title="Менеджер закупок">МЗ</div></div></header>
       <div className="dataset-bar"><div className="dataset-select"><Database size={15}/><label className="sr-only" htmlFor="dataset-select">Активный набор данных</label><select id="dataset-select" value={datasetId} onChange={e => selectDataset(e.target.value)} disabled={loading || !datasets.length}>{!datasets.length && <option value="">Нет загруженных данных</option>}{datasets.map(d => <option value={d.id} key={d.id}>{d.name}</option>)}</select>{dataset?.synthetic && <span className="badge demo">DEMO · СИНТЕТИКА</span>}</div><span className="dataset-date">{dataset ? `Данные на ${dateLabel(dataset.cutoffDate)}` : "Ваши данные — основа точного заказа"}</span><Link href="/import" className="text-link"><Upload size={14}/> Загрузить</Link></div>
       <main id="main" className="main-content"><ErrorNotice error={error}/>{children}</main><footer className="main-footer"><span>Apollon · Прозрачное планирование закупок</span><span>Заказы утверждает ответственный сотрудник</span></footer>
     </div>
